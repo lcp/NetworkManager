@@ -57,6 +57,8 @@ typedef enum {
  * item data
  * @NM_SETTING_802_1X_CK_SCHEME_PATH: certificate or key is stored as a path
  * to a file containing the certificate or key data
+ * @NM_SETTING_802_1X_CK_SCHEME_HASH: certificate or key is stored as a path
+ * of the CA server hash
  *
  * #NMSetting8021xCKScheme values indicate how a certificate or private key is
  * stored in the setting properties, either as a blob of the item's data, or as
@@ -65,7 +67,8 @@ typedef enum {
 typedef enum {
 	NM_SETTING_802_1X_CK_SCHEME_UNKNOWN = 0,
 	NM_SETTING_802_1X_CK_SCHEME_BLOB,
-	NM_SETTING_802_1X_CK_SCHEME_PATH
+	NM_SETTING_802_1X_CK_SCHEME_PATH,
+	NM_SETTING_802_1X_CK_SCHEME_HASH
 } NMSetting8021xCKScheme;
 
 
@@ -183,6 +186,7 @@ const char *      nm_setting_802_1x_get_phase2_ca_path               (NMSetting8
 NMSetting8021xCKScheme nm_setting_802_1x_get_ca_cert_scheme          (NMSetting8021x *setting);
 const GByteArray *     nm_setting_802_1x_get_ca_cert_blob            (NMSetting8021x *setting);
 const char *           nm_setting_802_1x_get_ca_cert_path            (NMSetting8021x *setting);
+const char *           nm_setting_802_1x_get_ca_cert_hash            (NMSetting8021x *setting);
 gboolean               nm_setting_802_1x_set_ca_cert                 (NMSetting8021x *setting,
                                                                       const char *cert_path,
                                                                       NMSetting8021xCKScheme scheme,

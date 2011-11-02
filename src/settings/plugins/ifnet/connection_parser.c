@@ -292,6 +292,8 @@ done:
 	return success;
 }
 
+#define SCHEME_HASH "hash://server/sha256/"
+
 static gboolean
 eap_peap_reader (const char *eap_method,
                  const char *ssid,
@@ -307,11 +309,18 @@ eap_peap_reader (const char *eap_method,
 
 	ca_cert = wpa_get_value (ssid, "ca_cert");
 	if (ca_cert) {
-		if (!nm_setting_802_1x_set_ca_cert (s_8021x,
-						    ca_cert,
-						    NM_SETTING_802_1X_CK_SCHEME_PATH,
-						    NULL, error))
-			goto done;
+		if (g_str_has_prefix (ca_cert, SCHEME_HASH))
+			if (!nm_setting_802_1x_set_ca_cert (s_8021x,
+							    ca_cert,
+							    NM_SETTING_802_1X_CK_SCHEME_HASH,
+							    NULL, error))
+				goto done;
+		else
+			if (!nm_setting_802_1x_set_ca_cert (s_8021x,
+							    ca_cert,
+							    NM_SETTING_802_1X_CK_SCHEME_PATH,
+							    NULL, error))
+				goto done;
 	} else {
 		PLUGIN_WARN (IFNET_PLUGIN_NAME, "    warning: missing "
 			     "IEEE_8021X_CA_CERT for EAP method '%s'; this is"
@@ -409,11 +418,18 @@ eap_ttls_reader (const char *eap_method,
 	/* ca cert */
 	ca_cert = wpa_get_value (ssid, "ca_cert");
 	if (ca_cert) {
-		if (!nm_setting_802_1x_set_ca_cert (s_8021x,
-						    ca_cert,
-						    NM_SETTING_802_1X_CK_SCHEME_PATH,
-						    NULL, error))
-			goto done;
+		if (g_str_has_prefix (ca_cert, SCHEME_HASH))
+			if (!nm_setting_802_1x_set_ca_cert (s_8021x,
+							    ca_cert,
+							    NM_SETTING_802_1X_CK_SCHEME_HASH,
+							    NULL, error))
+				goto done;
+		else
+			if (!nm_setting_802_1x_set_ca_cert (s_8021x,
+							    ca_cert,
+							    NM_SETTING_802_1X_CK_SCHEME_PATH,
+							    NULL, error))
+				goto done;
 	} else {
 		PLUGIN_WARN (IFNET_PLUGIN_NAME, "    warning: missing "
 			     "IEEE_8021X_CA_CERT for EAP method '%s'; this is"
@@ -1769,12 +1785,14 @@ error:
 
 typedef NMSetting8021xCKScheme (*SchemeFunc) (NMSetting8021x * setting);
 typedef const char *(*PathFunc) (NMSetting8021x * setting);
+typedef const char *(*HashFunc) (NMSetting8021x * setting);
 typedef const GByteArray *(*BlobFunc) (NMSetting8021x * setting);
 
 typedef struct ObjectType {
 	const char *setting_key;
 	SchemeFunc scheme_func;
 	PathFunc path_func;
+	HashFunc hash_func;
 	BlobFunc blob_func;
 	const char *conn_name_key;
 	const char *suffix;
@@ -1784,6 +1802,7 @@ static const ObjectType ca_type = {
 	NM_SETTING_802_1X_CA_CERT,
 	nm_setting_802_1x_get_ca_cert_scheme,
 	nm_setting_802_1x_get_ca_cert_path,
+	nm_setting_802_1x_get_ca_cert_hash,
 	nm_setting_802_1x_get_ca_cert_blob,
 	"ca_cert",
 	"ca-cert.der"
@@ -1793,6 +1812,7 @@ static const ObjectType phase2_ca_type = {
 	NM_SETTING_802_1X_PHASE2_CA_CERT,
 	nm_setting_802_1x_get_phase2_ca_cert_scheme,
 	nm_setting_802_1x_get_phase2_ca_cert_path,
+	NULL,
 	nm_setting_802_1x_get_phase2_ca_cert_blob,
 	"ca_cert2",
 	"inner-ca-cert.der"
@@ -1802,6 +1822,7 @@ static const ObjectType client_type = {
 	NM_SETTING_802_1X_CLIENT_CERT,
 	nm_setting_802_1x_get_client_cert_scheme,
 	nm_setting_802_1x_get_client_cert_path,
+	NULL,
 	nm_setting_802_1x_get_client_cert_blob,
 	"client_cert",
 	"client-cert.der"
@@ -1811,6 +1832,7 @@ static const ObjectType phase2_client_type = {
 	NM_SETTING_802_1X_PHASE2_CLIENT_CERT,
 	nm_setting_802_1x_get_phase2_client_cert_scheme,
 	nm_setting_802_1x_get_phase2_client_cert_path,
+	NULL,
 	nm_setting_802_1x_get_phase2_client_cert_blob,
 	"client_cert2",
 	"inner-client-cert.der"
@@ -1820,6 +1842,7 @@ static const ObjectType pk_type = {
 	NM_SETTING_802_1X_PRIVATE_KEY,
 	nm_setting_802_1x_get_private_key_scheme,
 	nm_setting_802_1x_get_private_key_path,
+	NULL,
 	nm_setting_802_1x_get_private_key_blob,
 	"private_key",
 	"private-key.pem"
@@ -1829,6 +1852,7 @@ static const ObjectType phase2_pk_type = {
 	NM_SETTING_802_1X_PHASE2_PRIVATE_KEY,
 	nm_setting_802_1x_get_phase2_private_key_scheme,
 	nm_setting_802_1x_get_phase2_private_key_path,
+	NULL,
 	nm_setting_802_1x_get_phase2_private_key_blob,
 	"private_key2",
 	"inner-private-key.pem"
@@ -1838,6 +1862,7 @@ static const ObjectType p12_type = {
 	NM_SETTING_802_1X_PRIVATE_KEY,
 	nm_setting_802_1x_get_private_key_scheme,
 	nm_setting_802_1x_get_private_key_path,
+	NULL,
 	nm_setting_802_1x_get_private_key_blob,
 	"private_key",
 	"private-key.p12"
@@ -1847,6 +1872,7 @@ static const ObjectType phase2_p12_type = {
 	NM_SETTING_802_1X_PHASE2_PRIVATE_KEY,
 	nm_setting_802_1x_get_phase2_private_key_scheme,
 	nm_setting_802_1x_get_phase2_private_key_path,
+	NULL,
 	nm_setting_802_1x_get_phase2_private_key_blob,
 	"private_key2",
 	"inner-private-key.p12"
@@ -1861,6 +1887,7 @@ write_object (NMSetting8021x *s_8021x,
 {
 	NMSetting8021xCKScheme scheme;
 	const char *path = NULL;
+	const char *hash = NULL;
 	const GByteArray *blob = NULL;
 
 	g_return_val_if_fail (conn_name != NULL, FALSE);
@@ -1879,6 +1906,9 @@ write_object (NMSetting8021x *s_8021x,
 		case NM_SETTING_802_1X_CK_SCHEME_PATH:
 			path = (*(objtype->path_func)) (s_8021x);
 			break;
+		case NM_SETTING_802_1X_CK_SCHEME_HASH:
+			hash = (*(objtype->hash_func)) (s_8021x);
+			break;
 		default:
 			break;
 		}
@@ -1890,6 +1920,15 @@ write_object (NMSetting8021x *s_8021x,
 	if (path) {
 		wpa_set_data (conn_name, (gchar *) objtype->conn_name_key,
 			      (gchar *) path);
+		return TRUE;
+	}
+
+	/* If the object hash was specified, prefer that over any raw cert data that
+	 * may have been sent.
+	 */
+	if (hash) {
+		wpa_set_data (conn_name, (gchar *) objtype->conn_name_key,
+			      (gchar *) hash);
 		return TRUE;
 	}
 
