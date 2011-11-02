@@ -89,6 +89,10 @@ typedef struct {
 	void (*connection_error) (NMSupplicantInterface * iface,
 	                          const char * name,
 	                          const char * message);
+
+	/* a RADIUS server certificate was received */
+	void (*certification) (NMSupplicantInterface * iface,
+	                       const GHashTable * ca_cert);
 } NMSupplicantInterfaceClass;
 
 

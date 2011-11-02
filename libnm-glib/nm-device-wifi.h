@@ -53,6 +53,7 @@ typedef struct {
 	/* Signals */
 	void (*access_point_added) (NMDeviceWifi *device, NMAccessPoint *ap);
 	void (*access_point_removed) (NMDeviceWifi *device, NMAccessPoint *ap);
+	void (*cert_received) (NMDeviceWifi *device, GHashTable *cert);
 
 	/* Padding for future expansion */
 	void (*_reserved1) (void);
@@ -60,7 +61,6 @@ typedef struct {
 	void (*_reserved3) (void);
 	void (*_reserved4) (void);
 	void (*_reserved5) (void);
-	void (*_reserved6) (void);
 } NMDeviceWifiClass;
 
 GType nm_device_wifi_get_type (void);
@@ -78,6 +78,9 @@ NMAccessPoint *          nm_device_wifi_get_access_point_by_path (NMDeviceWifi *
                                                                   const char *path);
 
 const GPtrArray *        nm_device_wifi_get_access_points        (NMDeviceWifi *device);
+
+gboolean                 nm_device_wifi_probe_cert               (NMDeviceWifi *device,
+                                                                  const GByteArray *ssid);
 
 G_END_DECLS
 
