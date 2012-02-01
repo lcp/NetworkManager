@@ -42,9 +42,6 @@
 #include "common.h"
 #include "utils.h"
 
-#define CONF_FILE SYSCONFDIR "/NetworkManager/NetworkManager.conf"
-#define OLD_CONF_FILE SYSCONFDIR "/NetworkManager/nm-system-settings.conf"
-
 static char *plugin_get_hostname (SCPluginKeyfile *plugin);
 static void system_config_interface_init (NMSystemConfigInterface *system_config_interface_class);
 
@@ -60,7 +57,7 @@ typedef struct {
 	GFileMonitor *monitor;
 	guint monitor_id;
 
-	const char *conf_file;
+	char *conf_file;
 	GFileMonitor *conf_file_monitor;
 	guint conf_file_monitor_id;
 
@@ -354,13 +351,15 @@ setup_monitoring (NMSystemConfigInterface *config)
 		priv->monitor = monitor;
 	}
 
-	file = g_file_new_for_path (priv->conf_file);
-	monitor = g_file_monitor_file (file, G_FILE_MONITOR_NONE, NULL, NULL);
-	g_object_unref (file);
+	if (priv->conf_file) {
+		file = g_file_new_for_path (priv->conf_file);
+		monitor = g_file_monitor_file (file, G_FILE_MONITOR_NONE, NULL, NULL);
+		g_object_unref (file);
 
-	if (monitor) {
-		priv->conf_file_monitor_id = g_signal_connect (monitor, "changed", G_CALLBACK (conf_file_changed), config);
-		priv->conf_file_monitor = monitor;
+		if (monitor) {
+			priv->conf_file_monitor_id = g_signal_connect (monitor, "changed", G_CALLBACK (conf_file_changed), config);
+			priv->conf_file_monitor = monitor;
+		}
 	}
 }
 
@@ -409,6 +408,9 @@ get_unmanaged_specs (NMSystemConfigInterface *config)
 	GKeyFile *key_file;
 	GSList *specs = NULL;
 	GError *error = NULL;
+
+	if (!priv->conf_file)
+		return NULL;
 
 	key_file = g_key_file_new ();
 	if (g_key_file_load_from_file (key_file, priv->conf_file, G_KEY_FILE_NONE, &error)) {
@@ -460,6 +462,9 @@ plugin_get_hostname (SCPluginKeyfile *plugin)
 	char *hostname = NULL;
 	GError *error = NULL;
 
+	if (!priv->conf_file)
+		return NULL;
+
 	key_file = g_key_file_new ();
 	if (g_key_file_load_from_file (key_file, priv->conf_file, G_KEY_FILE_NONE, &error))
 		hostname = g_key_file_get_value (key_file, "keyfile", "hostname", NULL);
@@ -480,6 +485,11 @@ plugin_set_hostname (SCPluginKeyfile *plugin, const char *hostname)
 	GKeyFile *key_file;
 	GError *error = NULL;
 	gboolean result = FALSE;
+
+	if (!priv->conf_file) {
+		g_warning ("Error saving hostname: no config file");
+		return FALSE;
+	}
 
 	key_file = g_key_file_new ();
 	if (g_key_file_load_from_file (key_file, priv->conf_file, G_KEY_FILE_NONE, &error)) {
@@ -517,14 +527,6 @@ plugin_set_hostname (SCPluginKeyfile *plugin, const char *hostname)
 static void
 sc_plugin_keyfile_init (SCPluginKeyfile *plugin)
 {
-	SCPluginKeyfilePrivate *priv = SC_PLUGIN_KEYFILE_GET_PRIVATE (plugin);
-
-	if (g_file_test (CONF_FILE, G_FILE_TEST_EXISTS))
-		priv->conf_file = CONF_FILE;
-	else
-		priv->conf_file = OLD_CONF_FILE;
-
-	priv->hostname = plugin_get_hostname (plugin);
 }
 
 static void
@@ -597,6 +599,7 @@ dispose (GObject *object)
 	}
 
 	g_free (priv->hostname);
+	g_free (priv->conf_file);
 
 	if (priv->hash)
 		g_hash_table_destroy (priv->hash);
@@ -642,13 +645,22 @@ system_config_interface_init (NMSystemConfigInterface *system_config_interface_c
 }
 
 GObject *
-nm_settings_keyfile_plugin_new (void)
+nm_settings_keyfile_plugin_new (const char *config_file)
 {
 	static SCPluginKeyfile *singleton = NULL;
+	SCPluginKeyfilePrivate *priv;
 
-	if (!singleton)
+	if (!singleton) {
 		singleton = SC_PLUGIN_KEYFILE (g_object_new (SC_TYPE_PLUGIN_KEYFILE, NULL));
-	else
+		if (singleton) {
+			priv = SC_PLUGIN_KEYFILE_GET_PRIVATE (singleton);
+
+			priv->conf_file = g_strdup (config_file);
+
+			/* plugin_set_hostname() has to be called *after* priv->conf_file is set */
+			priv->hostname = plugin_get_hostname (singleton);
+		}
+	} else
 		g_object_ref (singleton);
 
 	return G_OBJECT (singleton);

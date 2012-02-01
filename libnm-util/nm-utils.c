@@ -25,13 +25,14 @@
  */
 
 #include "config.h"
+#include <ctype.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
 #include <arpa/inet.h>
-
-#include "wireless-helper.h"
+#include <netinet/ether.h>
+#include <linux/if_infiniband.h>
 
 #include <glib.h>
 #include <glib-object.h>
@@ -360,6 +361,8 @@ nm_utils_is_empty_ssid (const guint8 * ssid, int len)
         return TRUE;
 }
 
+#define ESSID_MAX_SIZE 32
+
 /**
  * nm_utils_escape_ssid:
  * @ssid: pointer to a buffer containing the SSID data
@@ -376,7 +379,7 @@ nm_utils_is_empty_ssid (const guint8 * ssid, int len)
 const char *
 nm_utils_escape_ssid (const guint8 * ssid, guint32 len)
 {
-	static char escaped[IW_ESSID_MAX_SIZE * 2 + 1];
+	static char escaped[ESSID_MAX_SIZE * 2 + 1];
 	const guint8 *s = ssid;
 	char *d = escaped;
 
@@ -385,7 +388,7 @@ nm_utils_escape_ssid (const guint8 * ssid, guint32 len)
 		return escaped;
 	}
 
-	len = MIN (len, (guint32) IW_ESSID_MAX_SIZE);
+	len = MIN (len, (guint32) ESSID_MAX_SIZE);
 	while (len--) {
 		if (*s == '\0') {
 			*d++ = '\\';
@@ -2386,3 +2389,145 @@ nm_utils_wifi_is_channel_valid (guint32 channel, const char *band)
 		return FALSE;
 }
 
+/**
+ * nm_utils_hwaddr_len:
+ * @type: the type of address; either %ARPHRD_ETHER or %ARPHRD_INFINIBAND
+ *
+ * Returns the length in octets of a hardware address of type @type.
+ *
+ * Return value: the length
+ */
+int
+nm_utils_hwaddr_len (int type)
+{
+	if (type == ARPHRD_ETHER)
+		return ETH_ALEN;
+	else if (type == ARPHRD_INFINIBAND)
+		return INFINIBAND_ALEN;
+	else
+		g_return_val_if_reached (-1);
+}
+
+/**
+ * nm_utils_hwaddr_type:
+ * @len: the length of hardware address in bytes
+ *
+ * Returns the type (either %ARPHRD_ETHER or %ARPHRD_INFINIBAND) of the raw
+ * address given its length.
+ *
+ * Return value: the type, either %ARPHRD_ETHER or %ARPHRD_INFINIBAND, or -1 if
+ * the address length was not recognized
+ */
+int
+nm_utils_hwaddr_type (int len)
+{
+	if (len == ETH_ALEN)
+		return ARPHRD_ETHER;
+	else if (len == INFINIBAND_ALEN)
+		return ARPHRD_INFINIBAND;
+	else
+		g_return_val_if_reached (-1);
+}
+
+#define HEXVAL(c) ((c) <= '9' ? (c) - '0' : ((c) & 0x4F) - 'A' + 10)
+
+/**
+ * nm_utils_hwaddr_aton:
+ * @asc: the ASCII representation of a hardware address
+ * @type: the type of address; either %ARPHRD_ETHER or %ARPHRD_INFINIBAND
+ * @buffer: buffer to store the result into
+ *
+ * Parses @asc and converts it to binary form in @buffer. See
+ * nm_utils_hwaddr_atoba() if you'd rather have the result in a
+ * #GByteArray.
+ *
+ * Return value: @buffer, or %NULL if @asc couldn't be parsed
+ */
+guint8 *
+nm_utils_hwaddr_aton (const char *asc, int type, gpointer buffer)
+{
+	const char *in = asc;
+	guint8 *out = (guint8 *)buffer;
+	int left = nm_utils_hwaddr_len (type);
+
+	while (left && *in) {
+		guint8 d1 = in[0], d2 = in[1];
+
+		if (!isxdigit (d1))
+			return NULL;
+
+		/* If there's no leading zero (ie "aa:b:cc") then fake it */
+		if (d2 && isxdigit (d2)) {
+			*out++ = (HEXVAL (d1) << 4) + HEXVAL (d2);
+			in += 2;
+		} else {
+			/* Fake leading zero */
+			*out++ = (HEXVAL ('0') << 4) + HEXVAL (d1);
+			in += 1;
+		}
+
+		left--;
+		if (*in) {
+			if (*in != ':')
+				return NULL;
+			in++;
+		}
+	}
+
+	if (left == 0 && !*in)
+		return buffer;
+	else
+		return NULL;
+}
+
+/**
+ * nm_utils_hwaddr_atoba:
+ * @asc: the ASCII representation of a hardware address
+ * @type: the type of address; either %ARPHRD_ETHER or %ARPHRD_INFINIBAND
+ *
+ * Parses @asc and converts it to binary form in a #GByteArray. See
+ * nm_utils_hwaddr_aton() if you don't want a #GByteArray.
+ *
+ * Return value: (transfer full): a new #GByteArray, or %NULL if @asc couldn't
+ * be parsed
+ */
+GByteArray *
+nm_utils_hwaddr_atoba (const char *asc, int type)
+{
+	GByteArray *ba;
+	int len = nm_utils_hwaddr_len (type);
+
+	ba = g_byte_array_sized_new (len);
+	ba->len = len;
+	if (!nm_utils_hwaddr_aton (asc, type, ba->data)) {
+		g_byte_array_unref (ba);
+		return NULL;
+	}
+
+	return ba;
+}
+
+/**
+ * nm_utils_hwaddr_ntoa:
+ * @addr: a binary hardware address
+ * @type: the type of address; either %ARPHRD_ETHER or %ARPHRD_INFINIBAND
+ *
+ * Converts @addr to textual form.
+ *
+ * Return value: (transfer full): the textual form of @addr
+ */
+char *
+nm_utils_hwaddr_ntoa (gconstpointer addr, int type)
+{
+	const guint8 *in = addr;
+	GString *out = g_string_new (NULL);
+	int left = nm_utils_hwaddr_len (type);
+
+	while (left--) {
+		if (out->len)
+			g_string_append_c (out, ':');
+		g_string_append_printf (out, "%02X", *in++);
+	}
+
+	return g_string_free (out, FALSE);
+}

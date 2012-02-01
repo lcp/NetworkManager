@@ -4,10 +4,13 @@ bin_PROGRAMS = \
 INCLUDES = \
 	-I${top_srcdir} \
 	-I${top_srcdir}/include \
+	-I${top_builddir}/include \
 	-I${top_srcdir}/libnm-util \
 	-I${top_srcdir}/libnm-glib
 
 nmcli_SOURCES = \
+	common.c \
+	common.h \
 	connections.c \
 	connections.h \
 	devices.c \

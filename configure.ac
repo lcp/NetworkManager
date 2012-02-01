@@ -3,8 +3,8 @@ AC_PREREQ([2.63])
 dnl The NM version number
 m4_define([nm_major_version], [0])
 m4_define([nm_minor_version], [9])
-m4_define([nm_micro_version], [1])
-m4_define([nm_nano_version],  [95])
+m4_define([nm_micro_version], [3])
+m4_define([nm_nano_version],  [0])
 m4_define([nm_version],
           [nm_major_version.nm_minor_version.nm_micro_version.nm_nano_version])
 
@@ -132,12 +132,17 @@ if test "z$with_distro" = "z"; then
 	exit 1
 else
 	case $with_distro in
-		redhat|suse|gentoo|debian|slackware|arch|paldo|frugalware|mandriva|pardus|linexa|exherbo) ;;
+		redhat|suse|gentoo|debian|slackware|arch|paldo|frugalware|mandriva|pardus|linexa|exherbo|generic) ;;
 		*)
 			echo "Your distribution (${with_distro}) is not yet supported!  (patches welcome)"
 			exit 1
 			;;
 	esac
+fi
+
+AM_CONDITIONAL(TARGET_GENERIC, test x"$with_distro" = xgeneric)
+if test x"$with_distro" = xgeneric; then
+  AC_DEFINE(TARGET_GENERIC, 1, [Define for a general unknown Linux system])
 fi
 
 AM_CONDITIONAL(TARGET_REDHAT, test x"$with_distro" = xredhat)
@@ -208,7 +213,7 @@ if ! test x"$ac_distver" = x""; then
   AC_DEFINE_UNQUOTED(NM_DIST_VERSION, "$ac_distver", [Define the distribution version string])
 fi
 
-AC_MSG_CHECKING([Linux Wireless Extensions >= 18])
+AC_MSG_CHECKING([Linux kernel WEXT headers])
 AC_COMPILE_IFELSE(
 	[AC_LANG_PROGRAM(
               [[#ifndef __user
@@ -217,8 +222,7 @@ AC_COMPILE_IFELSE(
                 #include <sys/types.h>
                 #include <linux/types.h>
                 #include <sys/socket.h>
-                #include <net/if.h>
-                #include <wireless.h>]],
+                #include <linux/wireless.h>]],
               [[#ifndef IWEVGENIE
                 #error "not found"
                 #endif]])],
@@ -226,7 +230,25 @@ AC_COMPILE_IFELSE(
         [ac_have_iwevgenie=no])
 AC_MSG_RESULT($ac_have_iwevgenie)
 if test "$ac_have_iwevgenie" = no; then
-	AC_MSG_ERROR(wireless-tools or libiw development headers >= 28pre9 not installed or not functional)
+	AC_MSG_ERROR(Linux kernel development header linux/wireless.h not installed or not functional)
+fi
+
+AC_MSG_CHECKING([Linux kernel nl80211 headers])
+AC_COMPILE_IFELSE(
+	[AC_LANG_PROGRAM(
+              [[#ifndef __user
+                #define __user
+                #endif
+                #include <sys/types.h>
+                #include <linux/types.h>
+                #include <sys/socket.h>
+                #include <linux/nl80211.h>]],
+              [[int a = NL80211_RATE_INFO_BITRATE;]])],
+        [ac_have_nl80211=yes],
+        [ac_have_nl80211=no])
+AC_MSG_RESULT($ac_have_nl80211)
+if test "$ac_have_nl80211" = no; then
+	AC_MSG_ERROR(Linux kernel development header linux/nl80211.h not installed or not functional)
 fi
 
 dnl
@@ -316,10 +338,11 @@ AC_DEFINE_UNQUOTED(NO_CONSOLEKIT, $no_ck, [Define to disable use of ConsoleKit])
 have_libnl="no"
 PKG_CHECK_MODULES(LIBNL3, libnl-3.0, [have_libnl3=yes], [have_libnl3=no])
 PKG_CHECK_MODULES(LIBNL_ROUTE3, libnl-route-3.0, [have_libnl_route3=yes], [have_libnl_route3=no])
-if (test "${have_libnl3}" = "yes" -a "${have_libnl_route3}" = "yes"); then
+PKG_CHECK_MODULES(LIBNL_GENL3, libnl-genl-3.0, [have_libnl_genl3=yes], [have_libnl_genl3=no])
+if (test "${have_libnl3}" = "yes" -a "${have_libnl_route3}" = "yes" -a "${have_libnl_genl3}" = "yes"); then
 	AC_DEFINE(HAVE_LIBNL3, 1, [Define if you require specific libnl-3 support])
-	LIBNL_CFLAGS="$LIBNL3_CFLAGS $LIBNL_ROUTE3_CFLAGS"
-	LIBNL_LIBS="$LIBNL3_LIBS $LIBNL_ROUTE3_LIBS"
+	LIBNL_CFLAGS="$LIBNL3_CFLAGS $LIBNL_ROUTE3_CFLAGS $LIBNL_GENL3_CFLAGS"
+	LIBNL_LIBS="$LIBNL3_LIBS $LIBNL_ROUTE3_LIBS $LIBNL_GENL3_LIBS"
 	libnl_version="3"
 	have_libnl="yes"
 else
@@ -656,6 +679,7 @@ src/ppp-manager/Makefile
 src/dnsmasq-manager/Makefile
 src/modem-manager/Makefile
 src/bluez-manager/Makefile
+src/firewall-manager/Makefile
 src/settings/Makefile
 src/settings/plugins/Makefile
 src/settings/plugins/ifupdown/Makefile
@@ -724,7 +748,9 @@ docs/libnm-glib/Makefile
 docs/libnm-util/Makefile
 NetworkManager.pc
 examples/Makefile
+examples/shell/Makefile
 examples/python/Makefile
+examples/ruby/Makefile
 examples/C/Makefile
 examples/C/glib/Makefile
 examples/C/qt/Makefile

@@ -30,6 +30,7 @@
 #include <glib.h>
 #include "nm-device.h"
 #include "nm-ip4-config.h"
+#include "nm-setting-bond.h"
 
 /* Prototypes for system/distribution dependent functions,
  * implemented in the backend files in backends/ directory
@@ -56,9 +57,6 @@ struct rtnl_route *nm_system_add_ip4_vpn_gateway_route (NMDevice *parent_device,
 
 gboolean        nm_system_iface_flush_addresses         (int ifindex, int family);
 
-void			nm_system_enable_loopback				(void);
-void			nm_system_update_dns					(void);
-
 gboolean		nm_system_apply_ip4_config              (int ifindex,
                                                          NMIP4Config *config,
                                                          int priority,
@@ -83,10 +81,25 @@ gboolean        nm_system_iface_set_up                  (int ifindex,
                                                          gboolean up,
                                                          gboolean *no_firmware);
 
+guint32		nm_system_iface_get_flags		(int ifindex);
 gboolean        nm_system_iface_is_up                   (int ifindex);
 
 gboolean		nm_system_iface_set_mtu                 (int ifindex, guint32 mtu);
 
 gboolean		nm_system_iface_set_mac                 (int ifindex, const struct ether_addr *mac);
+
+gboolean		nm_system_apply_bonding_config          (NMSettingBond *s_bond);
+gboolean		nm_system_add_bonding_master	(NMSettingBond *setting);
+gboolean		nm_system_iface_enslave		(NMDevice *slave, NMDevice *master);
+gboolean		nm_system_iface_release		(NMDevice *slave, NMDevice *master);
+
+enum {
+		NM_IFACE_TYPE_UNSPEC = 0,
+		NM_IFACE_TYPE_BOND,
+		NM_IFACE_TYPE_VLAN,
+		NM_IFACE_TYPE_DUMMY,
+};
+
+int             nm_system_get_iface_type                (const char *name);
 
 #endif

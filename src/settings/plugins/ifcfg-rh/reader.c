@@ -15,7 +15,7 @@
  * with this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  *
- * Copyright (C) 2008 - 2011 Red Hat, Inc.
+ * Copyright (C) 2008 - 2012 Red Hat, Inc.
  */
 
 #include <config.h>
@@ -32,13 +32,7 @@
 #include <unistd.h>
 #include <netinet/ether.h>
 #include <linux/if.h>
-
-#ifndef __user
-#define __user
-#endif
-#include <linux/types.h>
-#include <wireless.h>
-#undef __user
+#include <linux/wireless.h>
 
 #include <glib.h>
 #include <glib/gi18n.h>
@@ -50,6 +44,7 @@
 #include <nm-setting-wired.h>
 #include <nm-setting-wireless.h>
 #include <nm-setting-8021x.h>
+#include <nm-setting-bond.h>
 #include <nm-utils.h>
 
 #include "common.h"
@@ -77,16 +72,46 @@ get_int (const char *str, int *value)
 	return TRUE;
 }
 
+static char *
+make_connection_name (shvarFile *ifcfg,
+                      const char *ifcfg_name,
+                      const char *suggested,
+                      const char *prefix)
+{
+	char *full_name = NULL, *name;
+
+	/* If the ifcfg file already has a NAME, always use that */
+	name = svGetValue (ifcfg, "NAME", FALSE);
+	if (name && strlen (name))
+		return name;
+
+	/* Otherwise construct a new NAME */
+	g_free (name);
+	if (!prefix)
+		prefix = _("System");
+
+	/* For cosmetic reasons, if the suggested name is the same as
+	 * the ifcfg files name, don't use it.  Mainly for wifi so that
+	 * the SSID is shown in the connection ID instead of just "wlan0".
+	 */
+	if (suggested && strcmp (ifcfg_name, suggested))
+		full_name = g_strdup_printf ("%s %s (%s)", prefix, suggested, ifcfg_name);
+	else
+		full_name = g_strdup_printf ("%s %s", prefix, ifcfg_name);
+
+	return full_name;
+}
+
 static NMSetting *
 make_connection_setting (const char *file,
                          shvarFile *ifcfg,
                          const char *type,
-                         const char *suggested)
+                         const char *suggested,
+                         const char *prefix)
 {
 	NMSettingConnection *s_con;
 	const char *ifcfg_name = NULL;
-	char *new_id = NULL, *uuid = NULL, *value;
-	char *ifcfg_id;
+	char *new_id, *uuid = NULL, *zone = NULL, *value;
 
 	ifcfg_name = utils_get_ifcfg_name (file, TRUE);
 	if (!ifcfg_name)
@@ -94,32 +119,9 @@ make_connection_setting (const char *file,
 
 	s_con = NM_SETTING_CONNECTION (nm_setting_connection_new ());
 
-	/* Try the ifcfg file's internally defined name if available */
-	ifcfg_id = svGetValue (ifcfg, "NAME", FALSE);
-	if (ifcfg_id && strlen (ifcfg_id))
-		g_object_set (s_con, NM_SETTING_CONNECTION_ID, ifcfg_id, NULL);
-
-	if (!nm_setting_connection_get_id (s_con)) {
-		if (suggested) {
-			/* For cosmetic reasons, if the suggested name is the same as
-			 * the ifcfg files name, don't use it.  Mainly for wifi so that
-			 * the SSID is shown in the connection ID instead of just "wlan0".
-			 */
-			if (strcmp (ifcfg_name, suggested)) {
-				new_id = g_strdup_printf ("%s %s (%s)", reader_get_prefix (), suggested, ifcfg_name);
-				g_object_set (s_con, NM_SETTING_CONNECTION_ID, new_id, NULL);
-			}
-		}
-
-		/* Use the ifcfg file's name as a last resort */
-		if (!nm_setting_connection_get_id (s_con)) {
-			new_id = g_strdup_printf ("%s %s", reader_get_prefix (), ifcfg_name);
-			g_object_set (s_con, NM_SETTING_CONNECTION_ID, new_id, NULL);
-		}
-	}
-
+	new_id = make_connection_name (ifcfg, ifcfg_name, suggested, prefix);
+	g_object_set (s_con, NM_SETTING_CONNECTION_ID, new_id, NULL);
 	g_free (new_id);
-	g_free (ifcfg_id);
 
 	/* Try for a UUID key before falling back to hashing the file name */
 	uuid = svGetValue (ifcfg, "UUID", FALSE);
@@ -127,6 +129,7 @@ make_connection_setting (const char *file,
 		g_free (uuid);
 		uuid = nm_utils_uuid_generate_from_string (ifcfg->fileName);
 	}
+
 	g_object_set (s_con,
 	              NM_SETTING_CONNECTION_TYPE, type,
 	              NM_SETTING_CONNECTION_UUID, uuid,
@@ -137,6 +140,14 @@ make_connection_setting (const char *file,
 	g_object_set (s_con, NM_SETTING_CONNECTION_AUTOCONNECT,
 	              svTrueValue (ifcfg, "ONBOOT", TRUE),
 	              NULL);
+
+	value = svGetValue (ifcfg, "MASTER", FALSE);
+	if (value) {
+		g_object_set (s_con, NM_SETTING_CONNECTION_MASTER, value, NULL);
+		g_object_set (s_con, NM_SETTING_CONNECTION_SLAVE_TYPE,
+		              NM_SETTING_BOND_SETTING_NAME, NULL);
+		g_free (value);
+	}
 
 	value = svGetValue (ifcfg, "USERS", FALSE);
 	if (value) {
@@ -153,14 +164,23 @@ make_connection_setting (const char *file,
 		g_strfreev (items);
 	}
 
+
+	zone = svGetValue(ifcfg, "ZONE", FALSE);
+	if (!zone || !strlen (zone)) {
+		g_free (zone);
+		zone = NULL;
+	}
+	g_object_set (s_con, NM_SETTING_CONNECTION_ZONE, zone, NULL);
+	g_free (zone);
+
 	return NM_SETTING (s_con);
 }
 
 static gboolean
-read_mac_address (shvarFile *ifcfg, const char *key, GByteArray **array, GError **error)
+read_mac_address (shvarFile *ifcfg, const char *key, int type,
+                  GByteArray **array, GError **error)
 {
 	char *value = NULL;
-	struct ether_addr *mac;
 
 	g_return_val_if_fail (ifcfg != NULL, FALSE);
 	g_return_val_if_fail (array != NULL, FALSE);
@@ -174,8 +194,8 @@ read_mac_address (shvarFile *ifcfg, const char *key, GByteArray **array, GError 
 		return TRUE;
 	}
 
-	mac = ether_aton (value);
-	if (!mac) {
+	*array = nm_utils_hwaddr_atoba (value, type);
+	if (!*array) {
 		g_set_error (error, IFCFG_PLUGIN_ERROR, 0,
 		             "%s: the MAC address '%s' was invalid.", key, value);
 		g_free (value);
@@ -183,8 +203,6 @@ read_mac_address (shvarFile *ifcfg, const char *key, GByteArray **array, GError 
 	}
 
 	g_free (value);
-	*array = g_byte_array_sized_new (ETH_ALEN);
-	g_byte_array_append (*array, (guint8 *) mac->ether_addr_octet, ETH_ALEN);
 	return TRUE;
 }
 
@@ -266,7 +284,7 @@ fill_ip4_setting_from_ibft (shvarFile *ifcfg,
 		goto done;
 	}
 
-	if (!read_mac_address (ifcfg, "HWADDR", &ifcfg_mac, error))
+	if (!read_mac_address (ifcfg, "HWADDR", ARPHRD_ETHER, &ifcfg_mac, error))
 		goto done;
 	/* Ensure we got a MAC */
 	if (!ifcfg_mac) {
@@ -627,7 +645,6 @@ read_one_ip4_route (shvarFile *ifcfg,
 
 	g_return_val_if_fail (ifcfg != NULL, NULL);
 	g_return_val_if_fail (network_file != NULL, NULL);
-	g_return_val_if_fail (which >= 0, NULL);
 
 	route = nm_ip4_route_new ();
 
@@ -1115,7 +1132,7 @@ static NMSetting *
 make_ip4_setting (shvarFile *ifcfg,
                   const char *network_file,
                   const char *iscsiadm_path,
-                  gboolean valid_ip6_config,
+                  gboolean can_disable_ip4,
                   GError **error)
 {
 	NMSettingIP4Config *s_ip4 = NULL;
@@ -1230,7 +1247,7 @@ make_ip4_setting (shvarFile *ifcfg,
 		    && !tmp_ip4_0 && !tmp_prefix_0 && !tmp_netmask_0
 		    && !tmp_ip4_1 && !tmp_prefix_1 && !tmp_netmask_1
 		    && !tmp_ip4_2 && !tmp_prefix_2 && !tmp_netmask_2) {
-			if (valid_ip6_config)
+			if (can_disable_ip4)
 				/* Nope, no IPv4 */
 				method = NM_SETTING_IP4_CONFIG_METHOD_DISABLED;
 			else
@@ -2045,18 +2062,18 @@ eap_simple_reader (const char *eap_method,
 }
 
 static char *
-get_cert_file (const char *ifcfg_path, const char *cert_path)
+get_full_file_path (const char *ifcfg_path, const char *file_path)
 {
-	const char *base = cert_path;
+	const char *base = file_path;
 	char *p, *ret, *dirname;
 
 	g_return_val_if_fail (ifcfg_path != NULL, NULL);
-	g_return_val_if_fail (cert_path != NULL, NULL);
+	g_return_val_if_fail (file_path != NULL, NULL);
 
-	if (cert_path[0] == '/')
-		return g_strdup (cert_path);
+	if (file_path[0] == '/')
+		return g_strdup (file_path);
 
-	p = strrchr (cert_path, '/');
+	p = strrchr (file_path, '/');
 	if (p)
 		base = p + 1;
 
@@ -2102,7 +2119,7 @@ eap_tls_reader (const char *eap_method,
 
 	ca_cert = svGetValue (ifcfg, ca_cert_key, FALSE);
 	if (ca_cert) {
-		real_path = get_cert_file (ifcfg->fileName, ca_cert);
+		real_path = get_full_file_path (ifcfg->fileName, ca_cert);
 		if (phase2) {
 			if (!nm_setting_802_1x_set_phase2_ca_cert (s_8021x,
 			                                           real_path,
@@ -2159,7 +2176,7 @@ eap_tls_reader (const char *eap_method,
 		goto done;
 	}
 
-	real_path = get_cert_file (ifcfg->fileName, privkey);
+	real_path = get_full_file_path (ifcfg->fileName, privkey);
 	if (phase2) {
 		if (!nm_setting_802_1x_set_phase2_private_key (s_8021x,
 		                                               real_path,
@@ -2196,7 +2213,7 @@ eap_tls_reader (const char *eap_method,
 			goto done;
 		}
 
-		real_path = get_cert_file (ifcfg->fileName, client_cert);
+		real_path = get_full_file_path (ifcfg->fileName, client_cert);
 		if (phase2) {
 			if (!nm_setting_802_1x_set_phase2_client_cert (s_8021x,
 			                                               real_path,
@@ -2246,7 +2263,7 @@ eap_peap_reader (const char *eap_method,
 
 	ca_cert = svGetValue (ifcfg, "IEEE_8021X_CA_CERT", FALSE);
 	if (ca_cert) {
-		real_cert_path = get_cert_file (ifcfg->fileName, ca_cert);
+		real_cert_path = get_full_file_path (ifcfg->fileName, ca_cert);
 		if (!nm_setting_802_1x_set_ca_cert (s_8021x,
 		                                    real_cert_path,
 		                                    NM_SETTING_802_1X_CK_SCHEME_PATH,
@@ -2352,7 +2369,7 @@ eap_ttls_reader (const char *eap_method,
 
 	ca_cert = svGetValue (ifcfg, "IEEE_8021X_CA_CERT", FALSE);
 	if (ca_cert) {
-		real_cert_path = get_cert_file (ifcfg->fileName, ca_cert);
+		real_cert_path = get_full_file_path (ifcfg->fileName, ca_cert);
 		if (!nm_setting_802_1x_set_ca_cert (s_8021x,
 		                                    real_cert_path,
 		                                    NM_SETTING_802_1X_CK_SCHEME_PATH,
@@ -2422,6 +2439,111 @@ done:
 	return success;
 }
 
+static gboolean
+eap_fast_reader (const char *eap_method,
+                 shvarFile *ifcfg,
+                 shvarFile *keys,
+                 NMSetting8021x *s_8021x,
+                 gboolean phase2,
+                 GError **error)
+{
+	char *anon_ident = NULL;
+	char *pac_file = NULL;
+	char *real_pac_path = NULL;
+	char *inner_auth = NULL;
+	char *fast_provisioning = NULL;
+	char *lower;
+	char **list = NULL, **iter;
+	const char* pac_prov_str;
+	gboolean allow_unauth = FALSE, allow_auth = FALSE;
+	gboolean success = FALSE;
+
+	pac_file = svGetValue (ifcfg, "IEEE_8021X_PAC_FILE", FALSE);
+	if (pac_file) {
+		real_pac_path = get_full_file_path (ifcfg->fileName, pac_file);
+		g_object_set (s_8021x, NM_SETTING_802_1X_PAC_FILE, real_pac_path, NULL);
+	}
+
+	fast_provisioning = svGetValue (ifcfg, "IEEE_8021X_FAST_PROVISIONING", FALSE);
+	if (fast_provisioning) {
+		list = g_strsplit_set (fast_provisioning, " \t", 0);
+		for (iter = list; iter && *iter; iter++) {
+			if (**iter == '\0')
+				continue;
+			if (strcmp (*iter, "allow-unauth") == 0)
+				allow_unauth = TRUE;
+			else if (strcmp (*iter, "allow-auth") == 0)
+				allow_auth = TRUE;
+			else {
+				PLUGIN_WARN (IFCFG_PLUGIN_NAME, "    warning: invalid IEEE_8021X_FAST_PROVISIONING '%s' "
+				             "(space-separated list of these values [allow-auth, allow-unauth] expected)",
+				             *iter);
+			}
+		}
+		g_strfreev (list);
+		list = NULL;
+	}
+	pac_prov_str = allow_unauth ? (allow_auth ? "3" : "1") : (allow_auth ? "2" : "0");
+	g_object_set (s_8021x, NM_SETTING_802_1X_PHASE1_FAST_PROVISIONING, pac_prov_str, NULL);
+
+	if (!pac_file && !(allow_unauth || allow_auth)) {
+		g_set_error (error, IFCFG_PLUGIN_ERROR, 0,
+		             "IEEE_8021X_PAC_FILE not provided and EAP-FAST automatic PAC provisioning disabled.");
+		goto done;
+	}
+
+	anon_ident = svGetValue (ifcfg, "IEEE_8021X_ANON_IDENTITY", FALSE);
+	if (anon_ident && strlen (anon_ident))
+		g_object_set (s_8021x, NM_SETTING_802_1X_ANONYMOUS_IDENTITY, anon_ident, NULL);
+
+	inner_auth = svGetValue (ifcfg, "IEEE_8021X_INNER_AUTH_METHODS", FALSE);
+	if (!inner_auth) {
+		g_set_error (error, IFCFG_PLUGIN_ERROR, 0,
+		             "Missing IEEE_8021X_INNER_AUTH_METHODS.");
+		goto done;
+	}
+
+	/* Handle options for the inner auth method */
+	list = g_strsplit (inner_auth, " ", 0);
+	for (iter = list; iter && *iter; iter++) {
+		if (!strlen (*iter))
+			continue;
+
+		if (   !strcmp (*iter, "MSCHAPV2")
+		    || !strcmp (*iter, "GTC")) {
+			if (!eap_simple_reader (*iter, ifcfg, keys, s_8021x, TRUE, error))
+				goto done;
+		} else {
+			g_set_error (error, IFCFG_PLUGIN_ERROR, 0,
+			             "Unknown IEEE_8021X_INNER_AUTH_METHOD '%s'.",
+			             *iter);
+			goto done;
+		}
+
+		lower = g_ascii_strdown (*iter, -1);
+		g_object_set (s_8021x, NM_SETTING_802_1X_PHASE2_AUTH, lower, NULL);
+		g_free (lower);
+		break;
+	}
+
+	if (!nm_setting_802_1x_get_phase2_auth (s_8021x)) {
+		g_set_error (error, IFCFG_PLUGIN_ERROR, 0,
+		             "No valid IEEE_8021X_INNER_AUTH_METHODS found.");
+		goto done;
+	}
+
+	success = TRUE;
+
+done:
+	g_strfreev (list);
+	g_free (inner_auth);
+	g_free (fast_provisioning);
+	g_free (real_pac_path);
+	g_free (pac_file);
+	g_free (anon_ident);
+	return success;
+}
+
 typedef struct {
 	const char *method;
 	gboolean (*reader)(const char *eap_method,
@@ -2443,6 +2565,7 @@ static EAPReader eap_readers[] = {
 	{ "tls", eap_tls_reader, FALSE },
 	{ "peap", eap_peap_reader, FALSE },
 	{ "ttls", eap_ttls_reader, FALSE },
+	{ "fast", eap_fast_reader, FALSE },
 	{ NULL, NULL }
 };
 
@@ -2749,7 +2872,7 @@ make_wireless_setting (shvarFile *ifcfg,
 
 	s_wireless = NM_SETTING_WIRELESS (nm_setting_wireless_new ());
 
-	if (read_mac_address (ifcfg, "HWADDR", &array, error)) {
+	if (read_mac_address (ifcfg, "HWADDR", ARPHRD_ETHER, &array, error)) {
 		if (array) {
 			g_object_set (s_wireless, NM_SETTING_WIRELESS_MAC_ADDRESS, array, NULL);
 
@@ -2773,7 +2896,7 @@ make_wireless_setting (shvarFile *ifcfg,
 	}
 
 	array = NULL;
-	if (read_mac_address (ifcfg, "MACADDR", &array, error)) {
+	if (read_mac_address (ifcfg, "MACADDR", ARPHRD_ETHER, &array, error)) {
 		if (array) {
 			g_object_set (s_wireless, NM_SETTING_WIRELESS_CLONED_MAC_ADDRESS, array, NULL);
 			g_byte_array_free (array, TRUE);
@@ -2901,19 +3024,16 @@ make_wireless_setting (shvarFile *ifcfg,
 
 	value = svGetValue (ifcfg, "BSSID", FALSE);
 	if (value) {
-		struct ether_addr *eth;
 		GByteArray *bssid;
 
-		eth = ether_aton (value);
-		if (!eth) {
+		bssid = nm_utils_hwaddr_atoba (value, ARPHRD_ETHER);
+		if (!bssid) {
 			g_set_error (error, IFCFG_PLUGIN_ERROR, 0,
 			             "Invalid BSSID '%s'", value);
 			g_free (value);
 			goto error;
 		}
 
-		bssid = g_byte_array_sized_new (ETH_ALEN);
-		g_byte_array_append (bssid, eth->ether_addr_octet, ETH_ALEN);
 		g_object_set (s_wireless, NM_SETTING_WIRELESS_BSSID, bssid, NULL);
 		g_byte_array_free (bssid, TRUE);
 		g_free (value);
@@ -3032,7 +3152,7 @@ wireless_connection_from_ifcfg (const char *file,
 	/* Connection */
 	con_setting = make_connection_setting (file, ifcfg,
 	                                       NM_SETTING_WIRELESS_SETTING_NAME,
-	                                       printable_ssid);
+	                                       printable_ssid, NULL);
 	g_free (printable_ssid);
 	if (!con_setting) {
 		g_set_error (error, IFCFG_PLUGIN_ERROR, 0,
@@ -3082,7 +3202,7 @@ make_wired_setting (shvarFile *ifcfg,
 		g_free (value);
 	}
 
-	if (read_mac_address (ifcfg, "HWADDR", &mac, error)) {
+	if (read_mac_address (ifcfg, "HWADDR", ARPHRD_ETHER, &mac, error)) {
 		if (mac) {
 			g_object_set (s_wired, NM_SETTING_WIRED_MAC_ADDRESS, mac, NULL);
 
@@ -3193,7 +3313,7 @@ make_wired_setting (shvarFile *ifcfg,
 	}
 
 	mac = NULL;
-	if (read_mac_address (ifcfg, "MACADDR", &mac, error)) {
+	if (read_mac_address (ifcfg, "MACADDR", ARPHRD_ETHER, &mac, error)) {
 		if (mac) {
 			g_object_set (s_wired, NM_SETTING_WIRED_CLONED_MAC_ADDRESS, mac, NULL);
 			g_byte_array_free (mac, TRUE);
@@ -3271,7 +3391,7 @@ wired_connection_from_ifcfg (const char *file,
 		return NULL;
 	}
 
-	con_setting = make_connection_setting (file, ifcfg, NM_SETTING_WIRED_SETTING_NAME, NULL);
+	con_setting = make_connection_setting (file, ifcfg, NM_SETTING_WIRED_SETTING_NAME, NULL, NULL);
 	if (!con_setting) {
 		g_set_error (error, IFCFG_PLUGIN_ERROR, 0,
 		             "Failed to create connection setting.");
@@ -3289,6 +3409,108 @@ wired_connection_from_ifcfg (const char *file,
 
 	if (s_8021x)
 		nm_connection_add_setting (connection, NM_SETTING (s_8021x));
+
+	if (!nm_connection_verify (connection, error)) {
+		g_object_unref (connection);
+		return NULL;
+	}
+
+	return connection;
+}
+
+static NMSetting *
+make_infiniband_setting (shvarFile *ifcfg,
+                         const char *file,
+                         gboolean nm_controlled,
+                         char **unmanaged,
+                         GError **error)
+{
+	NMSettingInfiniband *s_infiniband;
+	char *value = NULL;
+	GByteArray *mac = NULL;
+	int mtu;
+
+	s_infiniband = NM_SETTING_INFINIBAND (nm_setting_infiniband_new ());
+
+	value = svGetValue (ifcfg, "MTU", FALSE);
+	if (value) {
+		if (get_int (value, &mtu)) {
+			if (mtu >= 0 && mtu < 65536)
+				g_object_set (s_infiniband, NM_SETTING_INFINIBAND_MTU, mtu, NULL);
+		} else {
+			/* Shouldn't be fatal... */
+			PLUGIN_WARN (IFCFG_PLUGIN_NAME, "    warning: invalid MTU '%s'", value);
+		}
+		g_free (value);
+	}
+
+	if (read_mac_address (ifcfg, "HWADDR", ARPHRD_INFINIBAND, &mac, error)) {
+		if (mac) {
+			g_object_set (s_infiniband, NM_SETTING_INFINIBAND_MAC_ADDRESS, mac, NULL);
+
+			/* A connection can only be unmanaged if we know the MAC address */
+			if (!nm_controlled) {
+				char *mac_str = nm_utils_hwaddr_ntoa (mac->data, ARPHRD_INFINIBAND);
+				*unmanaged = g_strdup_printf ("mac:%s", mac_str);
+				g_free (mac_str);
+			}
+
+			g_byte_array_free (mac, TRUE);
+		}
+	} else {
+		g_object_unref (s_infiniband);
+		return NULL;
+	}
+
+	if (svTrueValue (ifcfg, "CONNECTED_MODE", FALSE))
+		g_object_set (s_infiniband, NM_SETTING_INFINIBAND_TRANSPORT_MODE, "connected", NULL);
+
+	if (!nm_controlled && !*unmanaged) {
+		/* If NM_CONTROLLED=no but there wasn't a MAC address, notify
+		   the user that the device cannot be unmanaged.
+		 */
+		PLUGIN_WARN (IFCFG_PLUGIN_NAME, "    warning: NM_CONTROLLED was false but HWADDR was missing; device will be managed");
+	}
+
+	return (NMSetting *) s_infiniband;
+}
+
+static NMConnection *
+infiniband_connection_from_ifcfg (const char *file,
+                                  shvarFile *ifcfg,
+                                  gboolean nm_controlled,
+                                  char **unmanaged,
+                                  GError **error)
+{
+	NMConnection *connection = NULL;
+	NMSetting *con_setting = NULL;
+	NMSetting *infiniband_setting = NULL;
+
+	g_return_val_if_fail (file != NULL, NULL);
+	g_return_val_if_fail (ifcfg != NULL, NULL);
+
+	connection = nm_connection_new ();
+	if (!connection) {
+		g_set_error (error, IFCFG_PLUGIN_ERROR, 0,
+		             "Failed to allocate new connection for %s.", file);
+		return NULL;
+	}
+
+	con_setting = make_connection_setting (file, ifcfg, NM_SETTING_INFINIBAND_SETTING_NAME, NULL, NULL);
+	if (!con_setting) {
+		g_set_error (error, IFCFG_PLUGIN_ERROR, 0,
+		             "Failed to create connection setting.");
+		g_object_unref (connection);
+		return NULL;
+	}
+	nm_connection_add_setting (connection, con_setting);
+
+	infiniband_setting = make_infiniband_setting (ifcfg, file, nm_controlled, unmanaged, error);
+	if (!infiniband_setting) {
+		g_object_unref (connection);
+		return NULL;
+	}
+	nm_connection_add_setting (connection, infiniband_setting);
 
 	if (!nm_connection_verify (connection, error)) {
 		g_object_unref (connection);
@@ -3339,6 +3561,165 @@ is_wireless_device (const char *iface)
 	return is_wireless;
 }
 
+static void
+handle_bond_option (NMSettingBond *s_bond,
+                    const char *key,
+                    const char *value)
+{
+	if (!g_strcmp0 (key, "mode"))
+		g_object_set (s_bond, NM_SETTING_BOND_MODE, value, NULL);
+	else if (!g_strcmp0 (key, "miimon"))
+		g_object_set (s_bond, NM_SETTING_BOND_MIIMON, strtoul(value, NULL, 0), NULL);
+	else if (!g_strcmp0 (key, "updelay"))
+		g_object_set (s_bond, NM_SETTING_BOND_UPDELAY, strtoul(value, NULL, 0), NULL);
+	else if (!g_strcmp0 (key, "downdelay"))
+		g_object_set (s_bond, NM_SETTING_BOND_DOWNDELAY, strtoul(value, NULL, 0), NULL);
+	else if (!g_strcmp0 (key, "arp_interval"))
+		g_object_set (s_bond, NM_SETTING_BOND_ARP_INTERVAL, strtoul(value, NULL, 0), NULL);
+	else if (!g_strcmp0 (key, "arp_ip_target"))
+		g_object_set (s_bond, NM_SETTING_BOND_ARP_IP_TARGET, value, NULL);
+	else
+		PLUGIN_WARN (IFCFG_PLUGIN_NAME, "    warning: invalid bonding option '%s'", key);
+}
+
+static NMSetting *
+make_bond_setting (shvarFile *ifcfg,
+                   const char *file,
+                   gboolean nm_controlled,
+                   char **unmanaged,
+                   GError **error)
+{
+	NMSettingBond *s_bond;
+	char *value;
+
+	s_bond = NM_SETTING_BOND (nm_setting_bond_new ());
+
+	value = svGetValue (ifcfg, "DEVICE", FALSE);
+	if (!value || !strlen (value)) {
+		g_set_error (error, IFCFG_PLUGIN_ERROR, 0, "mandatory DEVICE keyword missing");
+		goto error;
+	}
+
+	g_object_set (s_bond, NM_SETTING_BOND_INTERFACE_NAME, value, NULL);
+	g_free (value);
+
+	value = svGetValue (ifcfg, "BONDING_OPTS", FALSE);
+	if (value) {
+		char **items, **iter;
+
+		items = g_strsplit_set (value, " ", -1);
+		for (iter = items; iter && *iter; iter++) {
+			if (strlen (*iter)) {
+				char **keys, *key, *val;
+
+				keys = g_strsplit_set (*iter, "=", 2);
+				if (keys && *keys) {
+					key = *keys;
+					val = *(keys + 1);
+					if (val && strlen(key) && strlen(val))
+						handle_bond_option (s_bond, key, val);
+				}
+
+				g_strfreev (keys);
+			}
+		}
+		g_free (value);
+		g_strfreev (items);
+	}
+
+	return (NMSetting *) s_bond;
+
+error:
+	g_object_unref (s_bond);
+	return NULL;
+}
+
+static NMConnection *
+bond_connection_from_ifcfg (const char *file,
+                            shvarFile *ifcfg,
+                            gboolean nm_controlled,
+                            char **unmanaged,
+                            GError **error)
+{
+	NMConnection *connection = NULL;
+	NMSetting *con_setting = NULL;
+	NMSetting *bond_setting = NULL;
+	NMSetting *wired_setting = NULL;
+	NMSetting8021x *s_8021x = NULL;
+
+	g_return_val_if_fail (file != NULL, NULL);
+	g_return_val_if_fail (ifcfg != NULL, NULL);
+
+	connection = nm_connection_new ();
+	if (!connection) {
+		g_set_error (error, IFCFG_PLUGIN_ERROR, 0,
+		             "Failed to allocate new connection for %s.", file);
+		return NULL;
+	}
+
+	con_setting = make_connection_setting (file, ifcfg, NM_SETTING_BOND_SETTING_NAME, NULL, _("Bond"));
+	if (!con_setting) {
+		g_set_error (error, IFCFG_PLUGIN_ERROR, 0,
+		             "Failed to create connection setting.");
+		g_object_unref (connection);
+		return NULL;
+	}
+	nm_connection_add_setting (connection, con_setting);
+
+	bond_setting = make_bond_setting (ifcfg, file, nm_controlled, unmanaged, error);
+	if (!bond_setting) {
+		g_object_unref (connection);
+		return NULL;
+	}
+	nm_connection_add_setting (connection, bond_setting);
+
+	wired_setting = make_wired_setting (ifcfg, file, nm_controlled, unmanaged, &s_8021x, error);
+	if (!wired_setting) {
+		g_object_unref (connection);
+		return NULL;
+	}
+	nm_connection_add_setting (connection, wired_setting);
+
+	if (s_8021x)
+		nm_connection_add_setting (connection, NM_SETTING (s_8021x));
+
+	if (!nm_connection_verify (connection, error)) {
+		g_object_unref (connection);
+		return NULL;
+	}
+
+	return connection;
+}
+
+static gboolean
+disabling_ip4_config_allowed (NMConnection *connection)
+{
+	NMSettingConnection *s_con;
+
+	s_con = nm_connection_get_setting_connection (connection);
+	g_assert (s_con);
+
+	/* bonding slaves are allowed to have no ip configuration */
+	if (nm_setting_connection_is_slave_type (s_con, NM_SETTING_BOND_SETTING_NAME))
+		return TRUE;
+
+	return FALSE;
+}
+
+static gboolean
+is_bond_device (const char *name, shvarFile *parsed)
+{
+	g_return_val_if_fail (name != NULL, FALSE);
+	g_return_val_if_fail (parsed != NULL, FALSE);
+
+	if (svTrueValue (parsed, "BONDING_MASTER", FALSE))
+		return TRUE;
+	
+	/* XXX: Check for "bond[\d]+"? */
+
+	return FALSE;
+}
+
 enum {
 	IGNORE_REASON_NONE = 0x00,
 	IGNORE_REASON_BRIDGE = 0x01,
@@ -3363,7 +3744,7 @@ connection_from_file (const char *filename,
 	NMSetting *s_ip4, *s_ip6;
 	const char *ifcfg_name = NULL;
 	gboolean nm_controlled = TRUE;
-	gboolean ip6_used = FALSE;
+	gboolean can_disable_ip4 = FALSE;
 	GError *error = NULL;
 	guint32 ignore_reason = IGNORE_REASON_NONE;
 
@@ -3402,9 +3783,6 @@ connection_from_file (const char *filename,
 	if (!type) {
 		char *device;
 
-		/* If no type, if the device has wireless extensions, it's wifi,
-		 * otherwise it's ethernet.
-		 */
 		device = svGetValue (parsed, "DEVICE", FALSE);
 		if (!device) {
 			g_set_error (&error, IFCFG_PLUGIN_ERROR, 0,
@@ -3422,8 +3800,10 @@ connection_from_file (const char *filename,
 		}
 
 		if (!test_type) {
+			if (is_bond_device (device, parsed))
+				type = g_strdup (TYPE_BOND);
 			/* Test wireless extensions */
-			if (is_wireless_device (device))
+			else if (is_wireless_device (device))
 				type = g_strdup (TYPE_WIRELESS);
 			else
 				type = g_strdup (TYPE_ETHERNET);
@@ -3456,6 +3836,13 @@ connection_from_file (const char *filename,
 		g_free (lower);
 	}
 
+	if (svTrueValue (parsed, "BONDING_MASTER", FALSE) &&
+	    strcasecmp (type, TYPE_BOND)) {
+		g_set_error (&error, IFCFG_PLUGIN_ERROR, 0,
+		             "BONDING_MASTER=yes key only allowed in TYPE=bond connections");
+		goto done;
+	}
+
 	/* Ignore BRIDGE= and VLAN= connections for now too (rh #619863) */
 	tmp = svGetValue (parsed, "BRIDGE", FALSE);
 	if (tmp) {
@@ -3478,10 +3865,14 @@ connection_from_file (const char *filename,
 		connection = wired_connection_from_ifcfg (filename, parsed, nm_controlled, unmanaged, &error);
 	else if (!strcasecmp (type, TYPE_WIRELESS))
 		connection = wireless_connection_from_ifcfg (filename, parsed, nm_controlled, unmanaged, &error);
+	else if (!strcasecmp (type, TYPE_INFINIBAND))
+		connection = infiniband_connection_from_ifcfg (filename, parsed, nm_controlled, unmanaged, &error);
 	else if (!strcasecmp (type, TYPE_BRIDGE)) {
 		g_set_error (&error, IFCFG_PLUGIN_ERROR, 0,
 		             "Bridge connections are not yet supported");
-	} else {
+	} else if (!strcasecmp (type, TYPE_BOND))
+		connection = bond_connection_from_ifcfg (filename, parsed, nm_controlled, unmanaged, &error);
+	else {
 		g_set_error (&error, IFCFG_PLUGIN_ERROR, 0,
 		             "Unknown connection type '%s'", type);
 	}
@@ -3524,10 +3915,13 @@ connection_from_file (const char *filename,
 		nm_connection_add_setting (connection, s_ip6);
 		method = nm_setting_ip6_config_get_method (NM_SETTING_IP6_CONFIG (s_ip6));
 		if (method && strcmp (method, NM_SETTING_IP6_CONFIG_METHOD_IGNORE))
-			ip6_used = TRUE;
+			can_disable_ip4 = TRUE;
 	}
 
-	s_ip4 = make_ip4_setting (parsed, network_file, iscsiadm_path, ip6_used, &error);
+	if (disabling_ip4_config_allowed (connection))
+		can_disable_ip4 = TRUE;
+
+	s_ip4 = make_ip4_setting (parsed, network_file, iscsiadm_path, can_disable_ip4, &error);
 	if (error) {
 		g_object_unref (connection);
 		connection = NULL;
@@ -3544,7 +3938,7 @@ connection_from_file (const char *filename,
 	    && !g_ascii_strcasecmp (bootproto, "ibft")) {
 		NMSettingConnection *s_con;
 
-		s_con = (NMSettingConnection *) nm_connection_get_setting (connection, NM_TYPE_SETTING_CONNECTION);
+		s_con = nm_connection_get_setting_connection (connection);
 		g_assert (s_con);
 
 		g_object_set (G_OBJECT (s_con), NM_SETTING_CONNECTION_READ_ONLY, TRUE, NULL);
@@ -3567,11 +3961,5 @@ done:
 	else
 		g_clear_error (&error);
 	return connection;
-}
-
-const char *
-reader_get_prefix (void)
-{
-	return _("System");
 }
 

@@ -569,7 +569,7 @@ impl_ifcfgrh_get_ifcfg_details (SCPluginIfcfg *plugin,
 		return FALSE;
 	}
 
-	s_con = (NMSettingConnection *) nm_connection_get_setting (NM_CONNECTION (connection), NM_TYPE_SETTING_CONNECTION);
+	s_con = nm_connection_get_setting_connection (NM_CONNECTION (connection));
 	if (!s_con) {
 		g_set_error (error,
 		             NM_SETTINGS_ERROR,
@@ -790,7 +790,7 @@ system_config_interface_init (NMSystemConfigInterface *system_config_interface_c
 }
 
 G_MODULE_EXPORT GObject *
-nm_system_config_factory (void)
+nm_system_config_factory (const char *config_file)
 {
 	static SCPluginIfcfg *singleton = NULL;
 	SCPluginIfcfgPrivate *priv;

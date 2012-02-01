@@ -23,6 +23,7 @@ global:
 	nm_active_connection_get_default6;
 	nm_active_connection_get_default;
 	nm_active_connection_get_devices;
+	nm_active_connection_get_master;
 	nm_active_connection_get_specific_object;
 	nm_active_connection_get_state;
 	nm_active_connection_get_type;
@@ -84,6 +85,10 @@ global:
 	nm_device_get_type;
 	nm_device_get_udi;
 	nm_device_get_vendor;
+	nm_device_infiniband_get_carrier;
+	nm_device_infiniband_get_hw_address;
+	nm_device_infiniband_get_type;
+	nm_device_infiniband_new;
 	nm_device_modem_get_current_capabilities;
 	nm_device_modem_get_modem_capabilities;
 	nm_device_modem_get_type;

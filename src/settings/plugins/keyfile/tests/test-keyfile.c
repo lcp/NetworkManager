@@ -26,6 +26,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
+#include <linux/if_infiniband.h>
 
 #include <nm-utils.h>
 #include <nm-setting-connection.h>
@@ -38,6 +39,7 @@
 #include <nm-setting-ppp.h>
 #include <nm-setting-gsm.h>
 #include <nm-setting-8021x.h>
+#include <nm-setting-infiniband.h>
 
 #include "nm-test-helpers.h"
 
@@ -93,7 +95,7 @@ test_read_valid_wired_connection (void)
 
 	/* ===== CONNECTION SETTING ===== */
 
-	s_con = NM_SETTING_CONNECTION (nm_connection_get_setting (connection, NM_TYPE_SETTING_CONNECTION));
+	s_con = nm_connection_get_setting_connection (connection);
 	ASSERT (s_con != NULL,
 	        "connection-verify-connection", "failed to verify %s: missing %s setting",
 	        TEST_WIRED_FILE,
@@ -142,7 +144,7 @@ test_read_valid_wired_connection (void)
 
 	/* ===== WIRED SETTING ===== */
 
-	s_wired = NM_SETTING_WIRED (nm_connection_get_setting (connection, NM_TYPE_SETTING_WIRED));
+	s_wired = nm_connection_get_setting_wired (connection);
 	ASSERT (s_wired != NULL,
 	        "connection-verify-wired", "failed to verify %s: missing %s setting",
 	        TEST_WIRED_FILE,
@@ -174,7 +176,7 @@ test_read_valid_wired_connection (void)
 
 	/* ===== IPv4 SETTING ===== */
 
-	s_ip4 = NM_SETTING_IP4_CONFIG (nm_connection_get_setting (connection, NM_TYPE_SETTING_IP4_CONFIG));
+	s_ip4 = nm_connection_get_setting_ip4_config (connection);
 	ASSERT (s_ip4 != NULL,
 	        "connection-verify-ip4", "failed to verify %s: missing %s setting",
 	        TEST_WIRED_FILE,
@@ -297,7 +299,7 @@ test_read_valid_wired_connection (void)
 
 	/* ===== IPv6 SETTING ===== */
 
-	s_ip6 = NM_SETTING_IP6_CONFIG (nm_connection_get_setting (connection, NM_TYPE_SETTING_IP6_CONFIG));
+	s_ip6 = nm_connection_get_setting_ip6_config (connection);
 	ASSERT (s_ip6 != NULL,
 	        "connection-verify-ip6", "failed to verify %s: missing %s setting",
 	        TEST_WIRED_FILE,
@@ -745,7 +747,7 @@ test_read_ip6_wired_connection (void)
 
 	/* ===== CONNECTION SETTING ===== */
 
-	s_con = NM_SETTING_CONNECTION (nm_connection_get_setting (connection, NM_TYPE_SETTING_CONNECTION));
+	s_con = nm_connection_get_setting_connection (connection);
 	ASSERT (s_con != NULL,
 	        "connection-verify-connection", "failed to verify %s: missing %s setting",
 	        TEST_WIRED_IP6_FILE,
@@ -779,7 +781,7 @@ test_read_ip6_wired_connection (void)
 
 	/* ===== WIRED SETTING ===== */
 
-	s_wired = NM_SETTING_WIRED (nm_connection_get_setting (connection, NM_TYPE_SETTING_WIRED));
+	s_wired = nm_connection_get_setting_wired (connection);
 	ASSERT (s_wired != NULL,
 	        "connection-verify-wired", "failed to verify %s: missing %s setting",
 	        TEST_WIRED_IP6_FILE,
@@ -787,7 +789,7 @@ test_read_ip6_wired_connection (void)
 
 	/* ===== IPv4 SETTING ===== */
 
-	s_ip4 = NM_SETTING_IP4_CONFIG (nm_connection_get_setting (connection, NM_TYPE_SETTING_IP4_CONFIG));
+	s_ip4 = nm_connection_get_setting_ip4_config (connection);
 	ASSERT (s_ip4 != NULL,
 	        "connection-verify-ip4", "failed to verify %s: missing %s setting",
 	        TEST_WIRED_IP6_FILE,
@@ -809,7 +811,7 @@ test_read_ip6_wired_connection (void)
 
 	/* ===== IPv6 SETTING ===== */
 
-	s_ip6 = NM_SETTING_IP6_CONFIG (nm_connection_get_setting (connection, NM_TYPE_SETTING_IP6_CONFIG));
+	s_ip6 = nm_connection_get_setting_ip6_config (connection);
 	ASSERT (s_ip6 != NULL,
 	        "connection-verify-ip6", "failed to verify %s: missing %s setting",
 	        TEST_WIRED_IP6_FILE,
@@ -1001,7 +1003,7 @@ test_read_wired_mac_case (void)
 
 	/* ===== CONNECTION SETTING ===== */
 
-	s_con = NM_SETTING_CONNECTION (nm_connection_get_setting (connection, NM_TYPE_SETTING_CONNECTION));
+	s_con = nm_connection_get_setting_connection (connection);
 	ASSERT (s_con != NULL,
 	        "connection-verify-connection", "failed to verify %s: missing %s setting",
 	        TEST_WIRED_MAC_CASE_FILE,
@@ -1035,7 +1037,7 @@ test_read_wired_mac_case (void)
 
 	/* ===== WIRED SETTING ===== */
 
-	s_wired = NM_SETTING_WIRED (nm_connection_get_setting (connection, NM_TYPE_SETTING_WIRED));
+	s_wired = nm_connection_get_setting_wired (connection);
 	ASSERT (s_wired != NULL,
 	        "connection-verify-wired", "failed to verify %s: missing %s setting",
 	        TEST_WIRED_MAC_CASE_FILE,
@@ -1087,7 +1089,7 @@ test_read_valid_wireless_connection (void)
 
 	/* ===== CONNECTION SETTING ===== */
 
-	s_con = NM_SETTING_CONNECTION (nm_connection_get_setting (connection, NM_TYPE_SETTING_CONNECTION));
+	s_con = nm_connection_get_setting_connection (connection);
 	ASSERT (s_con != NULL,
 	        "connection-verify-connection", "failed to verify %s: missing %s setting",
 	        TEST_WIRELESS_FILE,
@@ -1136,7 +1138,7 @@ test_read_valid_wireless_connection (void)
 
 	/* ===== WIRED SETTING ===== */
 
-	s_wireless = NM_SETTING_WIRELESS (nm_connection_get_setting (connection, NM_TYPE_SETTING_WIRELESS));
+	s_wireless = nm_connection_get_setting_wireless (connection);
 	ASSERT (s_wireless != NULL,
 	        "connection-verify-wireless", "failed to verify %s: missing %s setting",
 	        TEST_WIRELESS_FILE,
@@ -1162,7 +1164,7 @@ test_read_valid_wireless_connection (void)
 
 	/* ===== IPv4 SETTING ===== */
 
-	s_ip4 = NM_SETTING_IP4_CONFIG (nm_connection_get_setting (connection, NM_TYPE_SETTING_IP4_CONFIG));
+	s_ip4 = nm_connection_get_setting_ip4_config (connection);
 	ASSERT (s_ip4 != NULL,
 	        "connection-verify-ip4", "failed to verify %s: missing %s setting",
 	        TEST_WIRELESS_FILE,
@@ -1315,7 +1317,7 @@ test_read_string_ssid (void)
 
 	/* ===== WIRELESS SETTING ===== */
 
-	s_wireless = NM_SETTING_WIRELESS (nm_connection_get_setting (connection, NM_TYPE_SETTING_WIRELESS));
+	s_wireless = nm_connection_get_setting_wireless (connection);
 	ASSERT (s_wireless != NULL,
 	        "connection-verify-wireless", "failed to verify %s: missing %s setting",
 	        TEST_STRING_SSID_FILE,
@@ -1832,7 +1834,7 @@ test_read_bt_dun_connection (void)
 
 	/* ===== CONNECTION SETTING ===== */
 
-	s_con = NM_SETTING_CONNECTION (nm_connection_get_setting (connection, NM_TYPE_SETTING_CONNECTION));
+	s_con = nm_connection_get_setting_connection (connection);
 	ASSERT (s_con != NULL,
 	        "connection-verify-connection", "failed to verify %s: missing %s setting",
 	        TEST_BT_DUN_FILE,
@@ -1866,7 +1868,7 @@ test_read_bt_dun_connection (void)
 
 	/* ===== BLUETOOTH SETTING ===== */
 
-	s_bluetooth = NM_SETTING_BLUETOOTH (nm_connection_get_setting (connection, NM_TYPE_SETTING_BLUETOOTH));
+	s_bluetooth = nm_connection_get_setting_bluetooth (connection);
 	ASSERT (s_bluetooth != NULL,
 	        "connection-verify-bt", "failed to verify %s: missing %s setting",
 	        TEST_WIRELESS_FILE,
@@ -1905,7 +1907,7 @@ test_read_bt_dun_connection (void)
 
 	/* ===== GSM SETTING ===== */
 
-	s_gsm = NM_SETTING_GSM (nm_connection_get_setting (connection, NM_TYPE_SETTING_GSM));
+	s_gsm = nm_connection_get_setting_gsm (connection);
 	ASSERT (s_gsm != NULL,
 	        "connection-verify-gsm", "failed to verify %s: missing %s setting",
 	        TEST_BT_DUN_FILE,
@@ -1952,7 +1954,7 @@ test_read_bt_dun_connection (void)
 
 	/* ===== SERIAL SETTING ===== */
 
-	s_serial = NM_SETTING_SERIAL (nm_connection_get_setting (connection, NM_TYPE_SETTING_SERIAL));
+	s_serial = nm_connection_get_setting_serial (connection);
 	ASSERT (s_serial != NULL,
 	        "connection-verify-serial", "failed to verify %s: missing %s setting",
 	        TEST_BT_DUN_FILE,
@@ -2081,7 +2083,7 @@ test_read_gsm_connection (void)
 	NMSettingConnection *s_con;
 	NMSettingSerial *s_serial;
 	NMSettingGsm *s_gsm;
-	NMSetting *s_bluetooth;
+	NMSettingBluetooth *s_bluetooth;
 	GError *error = NULL;
 	const char *tmp;
 	const char *expected_id = "AT&T Data Connect";
@@ -2100,7 +2102,7 @@ test_read_gsm_connection (void)
 
 	/* ===== CONNECTION SETTING ===== */
 
-	s_con = NM_SETTING_CONNECTION (nm_connection_get_setting (connection, NM_TYPE_SETTING_CONNECTION));
+	s_con = nm_connection_get_setting_connection (connection);
 	ASSERT (s_con != NULL,
 	        "connection-verify-connection", "failed to verify %s: missing %s setting",
 	        TEST_GSM_FILE,
@@ -2134,7 +2136,7 @@ test_read_gsm_connection (void)
 	/* ===== BLUETOOTH SETTING ===== */
 
 	/* Plain GSM, so no BT setting expected */
-	s_bluetooth = nm_connection_get_setting (connection, NM_TYPE_SETTING_BLUETOOTH);
+	s_bluetooth = nm_connection_get_setting_bluetooth (connection);
 	ASSERT (s_bluetooth == NULL,
 	        "connection-verify-bt", "unexpected %s setting",
 	        TEST_GSM_FILE,
@@ -2142,7 +2144,7 @@ test_read_gsm_connection (void)
 
 	/* ===== GSM SETTING ===== */
 
-	s_gsm = NM_SETTING_GSM (nm_connection_get_setting (connection, NM_TYPE_SETTING_GSM));
+	s_gsm = nm_connection_get_setting_gsm (connection);
 	ASSERT (s_gsm != NULL,
 	        "connection-verify-gsm", "failed to verify %s: missing %s setting",
 	        TEST_GSM_FILE,
@@ -2215,7 +2217,7 @@ test_read_gsm_connection (void)
 
 	/* ===== SERIAL SETTING ===== */
 
-	s_serial = NM_SETTING_SERIAL (nm_connection_get_setting (connection, NM_TYPE_SETTING_SERIAL));
+	s_serial = nm_connection_get_setting_serial (connection);
 	ASSERT (s_serial != NULL,
 	        "connection-verify-serial", "failed to verify %s: missing %s setting",
 	        TEST_GSM_FILE,
@@ -2324,7 +2326,7 @@ static void
 test_read_wired_8021x_tls_blob_connection (void)
 {
 	NMConnection *connection;
-	NMSetting *s_wired;
+	NMSettingWired *s_wired;
 	NMSetting8021x *s_8021x;
 	GError *error = NULL;
 	const char *tmp;
@@ -2346,11 +2348,11 @@ test_read_wired_8021x_tls_blob_connection (void)
 	}
 
 	/* ===== Wired Setting ===== */
-	s_wired = nm_connection_get_setting (connection, NM_TYPE_SETTING_WIRED);
+	s_wired = nm_connection_get_setting_wired (connection);
 	g_assert (s_wired != NULL);
 
 	/* ===== 802.1x Setting ===== */
-	s_8021x = (NMSetting8021x *) nm_connection_get_setting (connection, NM_TYPE_SETTING_802_1X);
+	s_8021x = nm_connection_get_setting_802_1x (connection);
 	g_assert (s_8021x != NULL);
 
 	g_assert (nm_setting_802_1x_get_num_eap_methods (s_8021x) == 1);
@@ -2389,7 +2391,7 @@ static void
 test_read_wired_8021x_tls_bad_path_connection (void)
 {
 	NMConnection *connection;
-	NMSetting *s_wired;
+	NMSettingWired *s_wired;
 	NMSetting8021x *s_8021x;
 	GError *error = NULL;
 	const char *tmp;
@@ -2411,11 +2413,11 @@ test_read_wired_8021x_tls_bad_path_connection (void)
 	}
 
 	/* ===== Wired Setting ===== */
-	s_wired = nm_connection_get_setting (connection, NM_TYPE_SETTING_WIRED);
+	s_wired = nm_connection_get_setting_wired (connection);
 	g_assert (s_wired != NULL);
 
 	/* ===== 802.1x Setting ===== */
-	s_8021x = (NMSetting8021x *) nm_connection_get_setting (connection, NM_TYPE_SETTING_802_1X);
+	s_8021x = nm_connection_get_setting_802_1x (connection);
 	g_assert (s_8021x != NULL);
 
 	g_assert (nm_setting_802_1x_get_num_eap_methods (s_8021x) == 1);
@@ -2451,7 +2453,7 @@ static void
 test_read_wired_8021x_tls_old_connection (void)
 {
 	NMConnection *connection;
-	NMSetting *s_wired;
+	NMSettingWired *s_wired;
 	NMSetting8021x *s_8021x;
 	GError *error = NULL;
 	const char *tmp;
@@ -2472,11 +2474,11 @@ test_read_wired_8021x_tls_old_connection (void)
 	}
 
 	/* ===== Wired Setting ===== */
-	s_wired = nm_connection_get_setting (connection, NM_TYPE_SETTING_WIRED);
+	s_wired = nm_connection_get_setting_wired (connection);
 	g_assert (s_wired != NULL);
 
 	/* ===== 802.1x Setting ===== */
-	s_8021x = (NMSetting8021x *) nm_connection_get_setting (connection, NM_TYPE_SETTING_802_1X);
+	s_8021x = nm_connection_get_setting_802_1x (connection);
 	g_assert (s_8021x != NULL);
 
 	g_assert (nm_setting_802_1x_get_num_eap_methods (s_8021x) == 1);
@@ -2507,7 +2509,7 @@ static void
 test_read_wired_8021x_tls_new_connection (void)
 {
 	NMConnection *connection;
-	NMSetting *s_wired;
+	NMSettingWired *s_wired;
 	NMSetting8021x *s_8021x;
 	GError *error = NULL;
 	const char *tmp;
@@ -2529,11 +2531,11 @@ test_read_wired_8021x_tls_new_connection (void)
 	}
 
 	/* ===== Wired Setting ===== */
-	s_wired = nm_connection_get_setting (connection, NM_TYPE_SETTING_WIRED);
+	s_wired = nm_connection_get_setting_wired (connection);
 	g_assert (s_wired != NULL);
 
 	/* ===== 802.1x Setting ===== */
-	s_8021x = (NMSetting8021x *) nm_connection_get_setting (connection, NM_TYPE_SETTING_802_1X);
+	s_8021x = nm_connection_get_setting_802_1x (connection);
 	g_assert (s_8021x != NULL);
 
 	g_assert (nm_setting_802_1x_get_num_eap_methods (s_8021x) == 1);
@@ -2779,7 +2781,7 @@ test_write_wired_8021x_tls_connection_blob (void)
 	g_assert (testfile);
 
 	/* Check that the new certs got written out */
-	s_con = (NMSettingConnection *) nm_connection_get_setting (connection, NM_TYPE_SETTING_CONNECTION);
+	s_con = nm_connection_get_setting_connection (connection);
 	g_assert (s_con);
 	uuid = nm_setting_connection_get_uuid (s_con);
 	g_assert (uuid);
@@ -2805,7 +2807,7 @@ test_write_wired_8021x_tls_connection_blob (void)
 	}
 
 	/* Ensure the re-read connection's certificates use the path scheme */
-	s_8021x = (NMSetting8021x *) nm_connection_get_setting (reread, NM_TYPE_SETTING_802_1X);
+	s_8021x = nm_connection_get_setting_802_1x (reread);
 	g_assert (s_8021x);
 	g_assert (nm_setting_802_1x_get_ca_cert_scheme (s_8021x) == NM_SETTING_802_1X_CK_SCHEME_PATH);
 	g_assert (nm_setting_802_1x_get_client_cert_scheme (s_8021x) == NM_SETTING_802_1X_CK_SCHEME_PATH);
@@ -2823,6 +2825,133 @@ test_write_wired_8021x_tls_connection_blob (void)
 
 	unlink (new_priv_key);
 	g_free (new_priv_key);
+
+	g_object_unref (reread);
+	g_object_unref (connection);
+}
+
+#define TEST_INFINIBAND_FILE    TEST_KEYFILES_DIR"/Test_Infiniband_Connection"
+
+static void
+test_read_infiniband_connection (void)
+{
+	NMConnection *connection;
+	NMSettingConnection *s_con;
+	NMSettingInfiniband *s_ib;
+	GError *error = NULL;
+	const GByteArray *array;
+	guint8 expected_mac[INFINIBAND_ALEN] = { 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66,
+		0x77, 0x88, 0x99, 0x01, 0x12, 0x23, 0x34, 0x45, 0x56, 0x67, 0x78, 0x89,
+		0x90 };
+	const char *expected_id = "Test Infiniband Connection";
+	const char *expected_uuid = "4e80a56d-c99f-4aad-a6dd-b449bc398c57";
+	gboolean success;
+
+	connection = nm_keyfile_plugin_connection_from_file (TEST_INFINIBAND_FILE, &error);
+	g_assert_no_error (error);
+	g_assert (connection);
+	success = nm_connection_verify (connection, &error);
+	g_assert_no_error (error);
+	g_assert (success);
+
+	/* Connection setting */
+	s_con = nm_connection_get_setting_connection (connection);
+	g_assert (s_con);
+	g_assert_cmpstr (nm_setting_connection_get_id (s_con), ==, expected_id);
+	g_assert_cmpstr (nm_setting_connection_get_uuid (s_con), ==, expected_uuid);
+
+	/* Infiniband setting */
+	s_ib = nm_connection_get_setting_infiniband (connection);
+	g_assert (s_ib);
+
+	array = nm_setting_infiniband_get_mac_address (s_ib);
+	g_assert (array);
+	g_assert_cmpint (array->len, ==, INFINIBAND_ALEN);
+	g_assert_cmpint (memcmp (array->data, expected_mac, sizeof (expected_mac)), ==, 0);
+
+	g_object_unref (connection);
+}
+
+static void
+test_write_infiniband_connection (void)
+{
+	NMConnection *connection;
+	NMSettingConnection *s_con;
+	NMSettingInfiniband *s_ib;
+	NMSettingIP4Config *s_ip4;
+	NMSettingIP6Config *s_ip6;
+	char *uuid;
+	GByteArray *mac;
+	guint8 tmpmac[] = { 0x99, 0x88, 0x77, 0x66, 0x55, 0x44, 0xab, 0xbc,
+		0xcd, 0xde, 0xef, 0xf0, 0x0a, 0x1b, 0x2c, 0x3d, 0x4e, 0x5f, 0x6f, 0xba
+	};
+	gboolean success;
+	NMConnection *reread;
+	char *testfile = NULL;
+	GError *error = NULL;
+	pid_t owner_grp;
+	uid_t owner_uid;
+
+	connection = nm_connection_new ();
+	g_assert (connection);
+
+	/* Connection setting */
+
+	s_con = (NMSettingConnection *) nm_setting_connection_new ();
+	g_assert (s_con);
+	nm_connection_add_setting (connection, NM_SETTING (s_con));
+
+	uuid = nm_utils_uuid_generate ();
+	g_object_set (s_con,
+	              NM_SETTING_CONNECTION_ID, "Work Infiniband",
+	              NM_SETTING_CONNECTION_UUID, uuid,
+	              NM_SETTING_CONNECTION_AUTOCONNECT, FALSE,
+	              NM_SETTING_CONNECTION_TYPE, NM_SETTING_INFINIBAND_SETTING_NAME,
+	              NULL);
+	g_free (uuid);
+
+	/* Infiniband setting */
+	s_ib = (NMSettingInfiniband *) nm_setting_infiniband_new ();
+	g_assert (s_ib);
+	nm_connection_add_setting (connection, NM_SETTING (s_ib));
+
+	mac = g_byte_array_sized_new (sizeof (tmpmac));
+	g_byte_array_append (mac, &tmpmac[0], sizeof (tmpmac));
+	g_object_set (s_ib,
+	              NM_SETTING_INFINIBAND_MAC_ADDRESS, mac,
+	              NM_SETTING_INFINIBAND_MTU, 900,
+	              NULL);
+	g_byte_array_free (mac, TRUE);
+
+	/* IP4 setting */
+	s_ip4 = (NMSettingIP4Config *) nm_setting_ip4_config_new ();
+	g_assert (s_ip4);
+	nm_connection_add_setting (connection, NM_SETTING (s_ip4));
+	g_object_set (s_ip4, NM_SETTING_IP4_CONFIG_METHOD, NM_SETTING_IP4_CONFIG_METHOD_AUTO, NULL);
+
+	/* IP6 setting */
+	s_ip6 = (NMSettingIP6Config *) nm_setting_ip6_config_new ();
+	g_assert (s_ip6);
+	nm_connection_add_setting (connection, NM_SETTING (s_ip6));
+	g_object_set (s_ip6, NM_SETTING_IP6_CONFIG_METHOD, NM_SETTING_IP6_CONFIG_METHOD_AUTO, NULL);
+
+	/* Write out the connection */
+	owner_uid = geteuid ();
+	owner_grp = getegid ();
+	success = nm_keyfile_plugin_write_test_connection (connection, TEST_SCRATCH_DIR, owner_uid, owner_grp, &testfile, &error);
+	g_assert_no_error (error);
+	g_assert (success);
+	g_assert (testfile);
+
+	/* Read the connection back in and compare it to the one we just wrote out */
+	reread = nm_keyfile_plugin_connection_from_file (testfile, &error);
+	g_assert_no_error (error);
+	g_assert (reread);
+
+	g_assert (nm_connection_compare (connection, reread, NM_SETTING_COMPARE_FLAG_EXACT));
+
+	unlink (testfile);
+	g_free (testfile);
 
 	g_object_unref (reread);
 	g_object_unref (connection);
@@ -2875,6 +3004,9 @@ int main (int argc, char **argv)
 	test_read_wired_8021x_tls_new_connection ();
 	test_write_wired_8021x_tls_connection_path ();
 	test_write_wired_8021x_tls_connection_blob ();
+
+	test_read_infiniband_connection ();
+	test_write_infiniband_connection ();
 
 	base = g_path_get_basename (argv[0]);
 	fprintf (stdout, "%s: SUCCESS\n", base);

@@ -15,7 +15,7 @@
  * with this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  *
- * Copyright (C) 2004 - 2011 Red Hat, Inc.
+ * Copyright (C) 2004 - 2012 Red Hat, Inc.
  * Copyright (C) 2005 - 2008 Novell, Inc.
  */
 
@@ -25,6 +25,7 @@
 #include <dbus/dbus-glib-lowlevel.h>
 #include <dbus/dbus-glib.h>
 #include <getopt.h>
+#include <locale.h>
 #include <errno.h>
 #include <stdlib.h>
 #include <signal.h>
@@ -40,11 +41,12 @@
 #include "NetworkManagerUtils.h"
 #include "nm-manager.h"
 #include "nm-policy.h"
-#include "nm-system.h"
+#include "backends/nm-backend.h"
 #include "nm-dns-manager.h"
 #include "nm-dbus-manager.h"
 #include "nm-supplicant-manager.h"
 #include "nm-dhcp-manager.h"
+#include "nm-firewall-manager.h"
 #include "nm-hostname-provider.h"
 #include "nm-netlink-monitor.h"
 #include "nm-vpn-manager.h"
@@ -65,80 +67,6 @@
 static NMManager *manager = NULL;
 static GMainLoop *main_loop = NULL;
 static int quit_pipe[2] = { -1, -1 };
-
-typedef struct {
-	time_t time;
-	GQuark domain;
-	guint32 code;
-	guint32 count;
-} MonitorInfo;
-
-static gboolean
-detach_monitor (gpointer data)
-{
-	nm_log_warn (LOGD_HW, "detaching netlink event monitor");
-	nm_netlink_monitor_detach (NM_NETLINK_MONITOR (data));
-	return FALSE;
-}
-
-static void
-nm_error_monitoring_device_link_state (NMNetlinkMonitor *monitor,
-									   GError *error,
-									   gpointer user_data)
-{
-	MonitorInfo *info = (MonitorInfo *) user_data;
-	time_t now;
-
-	now = time (NULL);
-
-	if (   (info->domain != error->domain)
-	    || (info->code != error->code)
-	    || (info->time && now > info->time + 10)) {
-		/* FIXME: Try to handle the error instead of just printing it. */
-		nm_log_warn (LOGD_HW, "error monitoring device for netlink events: %s\n", error->message);
-
-		info->time = now;
-		info->domain = error->domain;
-		info->code = error->code;
-		info->count = 0;
-	}
-
-	info->count++;
-	if (info->count > 100) {
-		/* Broken drivers will sometimes cause a flood of netlink errors.
-		 * rh #459205, novell #443429, lp #284507
-		 */
-		nm_log_warn (LOGD_HW, "excessive netlink errors ocurred, disabling netlink monitor.");
-		nm_log_warn (LOGD_HW, "link change events will not be processed.");
-		g_idle_add_full (G_PRIORITY_HIGH, detach_monitor, monitor, NULL);
-	}
-}
-
-static gboolean
-nm_monitor_setup (GError **error)
-{
-	NMNetlinkMonitor *monitor;
-	MonitorInfo *info;
-
-	monitor = nm_netlink_monitor_get ();
-	if (!nm_netlink_monitor_open_connection (monitor, error)) {
-		g_object_unref (monitor);
-		return FALSE;
-	}
-
-	info = g_new0 (MonitorInfo, 1);
-	g_signal_connect_data (G_OBJECT (monitor), "error",
-						   G_CALLBACK (nm_error_monitoring_device_link_state),
-						   info,
-						   (GClosureNotify) g_free,
-						   0);
-	nm_netlink_monitor_attach (monitor);
-
-	/* Request initial status of cards */
-	nm_netlink_monitor_request_status (monitor, NULL);
-
-	return TRUE;
-}
 
 static gboolean quit_early = FALSE;
 
@@ -212,7 +140,7 @@ setup_signals (void)
 
 	/* Set up our quit pipe */
 	if (pipe (quit_pipe) < 0) {
-		fprintf (stderr, "Failed to initialze SIGTERM pipe: %d", errno);
+		fprintf (stderr, _("Failed to initialize SIGTERM pipe: %d"), errno);
 		exit (1);
 	}
 	fcntl (quit_pipe[1], F_SETFL, O_NONBLOCK | fcntl (quit_pipe[1], F_GETFL));
@@ -243,18 +171,18 @@ write_pidfile (const char *pidfile)
 	gboolean success = FALSE;
  
 	if ((fd = open (pidfile, O_CREAT|O_WRONLY|O_TRUNC, 00644)) < 0) {
-		fprintf (stderr, "Opening %s failed: %s\n", pidfile, strerror (errno));
+		fprintf (stderr, _("Opening %s failed: %s\n"), pidfile, strerror (errno));
 		return FALSE;
 	}
 
  	snprintf (pid, sizeof (pid), "%d", getpid ());
 	if (write (fd, pid, strlen (pid)) < 0)
-		fprintf (stderr, "Writing to %s failed: %s\n", pidfile, strerror (errno));
+		fprintf (stderr, _("Writing to %s failed: %s\n"), pidfile, strerror (errno));
 	else
 		success = TRUE;
 
 	if (close (fd))
-		fprintf (stderr, "Closing %s failed: %s\n", pidfile, strerror (errno));
+		fprintf (stderr, _("Closing %s failed: %s\n"), pidfile, strerror (errno));
 
 	return success;
 }
@@ -297,7 +225,7 @@ check_pidfile (const char *pidfile)
 	if (strcmp (process_name, "NetworkManager") == 0) {
 		/* Check that the process exists */
 		if (kill (pid, 0) == 0) {
-			fprintf (stderr, "NetworkManager is already running (pid %ld)\n", pid);
+			fprintf (stderr, _("NetworkManager is already running (pid %ld)\n"), pid);
 			nm_running = TRUE;
 		}
 	}
@@ -341,8 +269,7 @@ parse_state_file (const char *filename,
 		 * /var/lib/NetworkManager for us since we have to ensure that
 		 * users upgrading NM get this working too.
 		 */
-		if (   tmp_error->domain == G_FILE_ERROR
-		    && tmp_error->code == G_FILE_ERROR_NOENT) {
+		if (g_error_matches (tmp_error, G_FILE_ERROR, G_FILE_ERROR_NOENT)) {
 			char *data, *dirname;
 			gsize len = 0;
 
@@ -427,47 +354,55 @@ main (int argc, char *argv[])
 	NMDBusManager *dbus_mgr = NULL;
 	NMSupplicantManager *sup_mgr = NULL;
 	NMDHCPManager *dhcp_mgr = NULL;
+	NMFirewallManager *fw_mgr = NULL;
 	NMSettings *settings = NULL;
 	NMConfig *config;
+	NMNetlinkMonitor *monitor = NULL;
 	GError *error = NULL;
 	gboolean wrote_pidfile = FALSE;
 
 	GOptionEntry options[] = {
-		{ "version", 0, 0, G_OPTION_ARG_NONE, &show_version, "Print NetworkManager version and exit", NULL },
-		{ "no-daemon", 0, 0, G_OPTION_ARG_NONE, &become_daemon, "Don't become a daemon", NULL },
-		{ "g-fatal-warnings", 0, 0, G_OPTION_ARG_NONE, &g_fatal_warnings, "Make all warnings fatal", NULL },
-		{ "pid-file", 0, 0, G_OPTION_ARG_FILENAME, &pidfile, "Specify the location of a PID file", "filename" },
-		{ "state-file", 0, 0, G_OPTION_ARG_FILENAME, &state_file, "State file location", "/path/to/state.file" },
-		{ "config", 0, 0, G_OPTION_ARG_FILENAME, &config_path, "Config file location", "/path/to/config.file" },
-		{ "plugins", 0, 0, G_OPTION_ARG_STRING, &plugins, "List of plugins separated by ','", "plugin1,plugin2" },
-		{ "log-level", 0, 0, G_OPTION_ARG_STRING, &log_level, "Log level: one of [ERR, WARN, INFO, DEBUG]", "INFO" },
+		{ "version", 0, 0, G_OPTION_ARG_NONE, &show_version, N_("Print NetworkManager version and exit"), NULL },
+		{ "no-daemon", 0, 0, G_OPTION_ARG_NONE, &become_daemon, N_("Don't become a daemon"), NULL },
+		{ "g-fatal-warnings", 0, 0, G_OPTION_ARG_NONE, &g_fatal_warnings, N_("Make all warnings fatal"), NULL },
+		{ "pid-file", 0, 0, G_OPTION_ARG_FILENAME, &pidfile, N_("Specify the location of a PID file"), N_("filename") },
+		{ "state-file", 0, 0, G_OPTION_ARG_FILENAME, &state_file, N_("State file location"), N_("/path/to/state.file") },
+		{ "config", 0, 0, G_OPTION_ARG_FILENAME, &config_path, N_("Config file location"), N_("/path/to/config.file") },
+		{ "plugins", 0, 0, G_OPTION_ARG_STRING, &plugins, N_("List of plugins separated by ','"), N_("plugin1,plugin2") },
+		/* Translators: Do not translate the values in the square brackets */
+		{ "log-level", 0, 0, G_OPTION_ARG_STRING, &log_level, N_("Log level: one of [ERR, WARN, INFO, DEBUG]"), "INFO" },
 		{ "log-domains", 0, 0, G_OPTION_ARG_STRING, &log_domains,
-		        "Log domains separated by ',': any combination of\n"
+		        /* Translators: Do not translate the values in the square brackets */
+		        N_("Log domains separated by ',': any combination of\n"
 		        "                                          [NONE,HW,RFKILL,ETHER,WIFI,BT,MB,DHCP4,DHCP6,PPP,\n"
 		        "                                           WIFI_SCAN,IP4,IP6,AUTOIP4,DNS,VPN,SHARING,SUPPLICANT,\n"
-		        "                                           AGENTS,SETTINGS,SUSPEND,CORE,DEVICE,OLPC,WIMAX]",
+		        "                                           AGENTS,SETTINGS,SUSPEND,CORE,DEVICE,OLPC,WIMAX,\n"
+		        "                                           INFINIBAND,FIREWALL]"),
 		        "HW,RFKILL,WIFI" },
 		{NULL}
 	};
 
 	if (!g_module_supported ()) {
-		fprintf (stderr, "GModules are not supported on your platform!\n");
+		fprintf (stderr, _("GModules are not supported on your platform!\n"));
 		exit (1);
 	}
+
+	/* Set locale to be able to use environment variables */
+	setlocale (LC_ALL, "");
 
 	bindtextdomain (GETTEXT_PACKAGE, NMLOCALEDIR);
 	bind_textdomain_codeset (GETTEXT_PACKAGE, "UTF-8");
 	textdomain (GETTEXT_PACKAGE);
 
 	/* Parse options */
-	opt_ctx = g_option_context_new ("");
-	g_option_context_set_translation_domain (opt_ctx, "UTF-8");
+	opt_ctx = g_option_context_new (NULL);
+	g_option_context_set_translation_domain (opt_ctx, GETTEXT_PACKAGE);
 	g_option_context_set_ignore_unknown_options (opt_ctx, FALSE);
 	g_option_context_set_help_enabled (opt_ctx, TRUE);
 	g_option_context_add_main_entries (opt_ctx, options, NULL);
 
 	g_option_context_set_summary (opt_ctx,
-		"NetworkManager monitors all network connections and automatically\nchooses the best connection to use.  It also allows the user to\nspecify wireless access points which wireless cards in the computer\nshould associate with.");
+		_("NetworkManager monitors all network connections and automatically\nchooses the best connection to use.  It also allows the user to\nspecify wireless access points which wireless cards in the computer\nshould associate with."));
 
 	success = g_option_context_parse (opt_ctx, &argc, &argv, NULL);
 	g_option_context_free (opt_ctx);
@@ -483,7 +418,7 @@ main (int argc, char *argv[])
 	}
 
 	if (getuid () != 0) {
-		fprintf (stderr, "You must be root to run NetworkManager!\n");
+		fprintf (stderr, _("You must be root to run NetworkManager!\n"));
 		exit (1);
 	}
 
@@ -503,9 +438,9 @@ main (int argc, char *argv[])
 	/* Read the config file and CLI overrides */
 	config = nm_config_new (config_path, plugins, log_level, log_domains, &error);
 	if (config == NULL) {
-		fprintf (stderr, "Failed to read configuration: (%d) %s\n",
+		fprintf (stderr, _("Failed to read configuration: (%d) %s\n"),
 		         error ? error->code : -1,
-		         (error && error->message) ? error->message : "unknown");
+		         (error && error->message) ? error->message : _("unknown"));
 		exit (1);
 	}
 
@@ -521,10 +456,10 @@ main (int argc, char *argv[])
 
 	/* Parse the state file */
 	if (!parse_state_file (state_file, &net_enabled, &wifi_enabled, &wwan_enabled, &wimax_enabled, &error)) {
-		fprintf (stderr, "State file %s parsing failed: (%d) %s\n",
+		fprintf (stderr, _("State file %s parsing failed: (%d) %s\n"),
 		         state_file,
 		         error ? error->code : -1,
-		         (error && error->message) ? error->message : "unknown");
+		         (error && error->message) ? error->message : _("unknown"));
 		/* Not a hard failure */
 	}
 	g_clear_error (&error);
@@ -538,7 +473,7 @@ main (int argc, char *argv[])
 			int saved_errno;
 
 			saved_errno = errno;
-			fprintf (stderr, "Could not daemonize: %s [error %u]\n",
+			fprintf (stderr, _("Could not daemonize: %s [error %u]\n"),
 			         g_strerror (saved_errno),
 			         saved_errno);
 			exit (1);
@@ -598,12 +533,8 @@ main (int argc, char *argv[])
 
 	main_loop = g_main_loop_new (NULL, FALSE);
 
-	/* Create watch functions that monitor cards for link status. */
-	if (!nm_monitor_setup (&error)) {
-		nm_log_err (LOGD_CORE, "failed to start monitoring devices: %s.",
-		            error && error->message ? error->message : "(unknown)");
-		goto done;
-	}
+	/* Create netlink monitor object */
+	monitor = nm_netlink_monitor_get ();
 
 	/* Initialize our DBus service & connection */
 	dbus_mgr = nm_dbus_manager_get ();
@@ -664,6 +595,13 @@ main (int argc, char *argv[])
 
 	nm_dhcp_manager_set_hostname_provider (dhcp_mgr, NM_HOSTNAME_PROVIDER (manager));
 
+	/* Initialize Firewall manager */
+	fw_mgr = nm_firewall_manager_get ();
+	if (!fw_mgr) {
+		nm_log_err (LOGD_CORE, "failed to start the Firewall manager: %s.", error->message);
+		goto done;
+	}
+
 	/* Start our DBus service */
 	if (!nm_dbus_manager_start_service (dbus_mgr)) {
 		nm_log_err (LOGD_CORE, "failed to start the dbus service.");
@@ -676,7 +614,7 @@ main (int argc, char *argv[])
 	nm_manager_start (manager);
 
 	/* Bring up the loopback interface. */
-	nm_system_enable_loopback ();
+	nm_backend_enable_loopback ();
 
 	success = TRUE;
 
@@ -707,6 +645,9 @@ done:
 
 	if (sup_mgr)
 		g_object_unref (sup_mgr);
+
+	if (fw_mgr)
+		g_object_unref (fw_mgr);
 
 	if (dbus_mgr)
 		g_object_unref (dbus_mgr);

@@ -22,6 +22,7 @@
 #include <string.h>
 #include <nm-system-config-interface.h>
 #include <stdio.h>
+#include "plugin.h"
 #include "net_parser.h"
 #include "net_utils.h"
 
@@ -106,7 +107,6 @@ ignore_connection_name (const char *name)
 	if (strlen (name) == 12 && is_hex (name))
 		result = TRUE;
 	return result;
-
 }
 
 static gboolean
@@ -169,12 +169,10 @@ init_block_by_line (gchar * buf)
 			conn = add_new_connection_config ("wireless", pos);
 	}
 	data = g_strdup (key_value[1]);
-	tmp = strip_string (data, '(');
-	tmp = strip_string (tmp, ')');
-	strip_string (tmp, '"');
+	tmp = strip_string (data, '"');
 	strip_string (tmp, '\'');
 	if (conn)
-		g_hash_table_insert (conn, g_strdup (key_value[0]),
+		g_hash_table_insert (conn, strip_string (g_strdup (key_value[0]), ' '),
 				     g_strdup (tmp));
 	g_free (data);
 	g_strfreev (key_value);
@@ -195,26 +193,31 @@ destroy_connection_config (GHashTable * conn)
 	g_hash_table_destroy (conn);
 }
 
-// read settings from /etc/NetworkManager/nm-system-settings.conf
+/* Read settings from NetworkManager's config file */
 const char *
 ifnet_get_global_setting (const char *group, const char *key)
 {
 	GError *error = NULL;
 	GKeyFile *keyfile = g_key_file_new ();
 	gchar *result = NULL;
+	const char *conf_file;
+
+	/* Get confing file name from plugin. */
+	conf_file = ifnet_plugin_get_conf_file ();
 
 	if (!g_key_file_load_from_file (keyfile,
-					IFNET_SYSTEM_SETTINGS_KEY_FILE,
+					conf_file,
 					G_KEY_FILE_NONE, &error)) {
 		PLUGIN_WARN (IFNET_PLUGIN_NAME,
 			     "loading system config file (%s) caused error: (%d) %s",
-			     IFNET_SYSTEM_SETTINGS_KEY_FILE,
+			     conf_file,
 			     error ? error->code : -1, error
 			     && error->message ? error->message : "(unknown)");
 	} else {
 		result = g_key_file_get_string (keyfile, group, key, &error);
 	}
 	g_key_file_free (keyfile);
+
 	return result;
 }
 
@@ -283,6 +286,20 @@ is_function (gchar * line)
 	return FALSE;
 }
 
+static void
+append_line (GString *buf, gchar* line)
+{
+	gchar *pos = NULL;
+
+	if ((pos = strchr (line, '#')) != NULL)
+		*pos = '\0';
+	g_strstrip (line);
+
+	if (line[0] != '\0')
+		g_string_append_printf (buf, " %s", line);
+	g_free (line);
+}
+
 gboolean
 ifnet_init (gchar * config_file)
 {
@@ -291,6 +308,8 @@ ifnet_init (gchar * config_file)
 
 	/* Handle multiple lines with brackets */
 	gboolean complete = TRUE;
+
+	gboolean openrc_style = TRUE;
 
 	/* line buffer */
 	GString *buf;
@@ -319,36 +338,60 @@ ifnet_init (gchar * config_file)
 			strip_function (channel, line);
 			continue;
 		}
-		if (line[0] != '#' && line[0] != '\0') {
-			gchar *pos = NULL;
 
+		// New openrc style, bash arrays are not allowed. We only care about '"'
+		if (openrc_style && line[0] != '#' && line[0] != '\0'
+				&& !strchr (line, '(') && !strchr (line, ')')) {
+			gchar *tmp = line;
+
+			while ((tmp = strchr (tmp, '"')) != NULL) {
+				complete = !complete;
+				++tmp;
+			}
+
+			append_line (buf, line);
+			// Add "(separator) for routes. It will be easier for later parsing
+			if (strstr (buf->str, "via"))
+				g_string_append_printf (buf, "\"");
+
+			if (!complete)
+				continue;
+
+			strip_string (buf->str, '"');
+
+			init_block_by_line (buf->str);
+			g_string_free (buf, TRUE);
+			buf = g_string_new (NULL);
+		}
+		// Old bash arrays for baselayout-1, to be deleted
+		else if (line[0] != '#' && line[0] != '\0') {
 			if (!complete) {
 				complete =
 				    g_strrstr (line,
 					       ")") == NULL ? FALSE : TRUE;
-				if ((pos = strchr (line, '#')) != NULL)
-					*pos = '\0';
-				g_strstrip (line);
-				if (line[0] != '\0') {
-					g_string_append_printf (buf,
-								" %s", line);
-				}
-				g_free (line);
-				if (!complete)
+
+				append_line (buf, line);
+				if (!complete) {
+					openrc_style = FALSE;
 					continue;
+				}
+				else {
+					openrc_style = TRUE;
+				}
 			} else {
 				complete =
 				    (g_strrstr (line, "(") != NULL
 				     && g_strrstr (line, ")") != NULL)
 				    || g_strrstr (line, "(") == NULL;
-				if ((pos = strchr (line, '#')) != NULL)
-					*pos = '\0';
-				g_strstrip (line);
-				if (line[0] != '\0')
-					g_string_append (buf, line);
-				g_free (line);
+
+				append_line (buf, line);
 				if (!complete)
+				{
+					openrc_style = FALSE;
 					continue;
+				} else {
+					openrc_style = TRUE;
+				}
 			}
 			init_block_by_line (buf->str);
 			g_string_free (buf, TRUE);
@@ -391,7 +434,7 @@ ifnet_set_data (const char *conn_name, const char *key, const char *value)
 	}
 	/* Remove existing key value pair */
 	if (g_hash_table_lookup_extended (conn, key, &old_key, &old_value)) {
-		if (stripped && !strcmp(old_value, stripped)){
+		if (stripped && !strcmp (old_value, stripped)) {
 			g_free (stripped);
 			return;
 		}
@@ -436,22 +479,28 @@ format_ips (gchar * value, gchar ** out_line, gchar * key, gchar * name)
 	guint length, i;
 	GString *formated_string = g_string_new (NULL);
 
+	strip_string (value, '(');
+	strip_string (value, ')');
 	strip_string (value, '"');
-	ipset = g_strsplit (value, "\" \"", 0);
+	ipset = g_strsplit (value, "\"", 0);
 	length = g_strv_length (ipset);
 
 	//only one line
 	if (length < 2) {
 		*out_line =
-		    g_strdup_printf ("%s_%s=( \"%s\" )\n", key, name, value);
+		    g_strdup_printf ("%s_%s=\"%s\"\n", key, name, value);
 		goto done;
 	}
 	// Multiple lines
-	g_string_append_printf (formated_string, "%s_%s=(\n", key, name);
+	g_string_append_printf (formated_string, "%s_%s=\"\n", key, name);
 	for (i = 0; i < length; i++)
-		g_string_append_printf (formated_string,
-					"\t\"%s\"\n", ipset[i]);
-	g_string_append (formated_string, ")\n");
+	{
+		strip_string (ipset[i], ' ');
+		if (ipset[i][0] != '\0')
+			g_string_append_printf (formated_string,
+						"%s\n", ipset[i]);
+	}
+	g_string_append (formated_string, "\"\n");
 	*out_line = g_strdup (formated_string->str);
 done:
 	g_string_free (formated_string, TRUE);
@@ -466,7 +515,7 @@ ifnet_flush_to_file (const char *config_file)
 	gpointer key, value, name, network;
 	GHashTableIter iter, iter_network;
 	GList *list_iter;
-	gchar *out_line;
+	gchar *out_line = NULL;
 	gsize bytes_written;
 	gboolean result = FALSE;
 

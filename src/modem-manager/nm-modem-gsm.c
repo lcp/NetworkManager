@@ -30,6 +30,7 @@
 #include "nm-device-private.h"
 #include "nm-setting-connection.h"
 #include "nm-setting-gsm.h"
+#include "nm-setting-ppp.h"
 #include "nm-modem-types.h"
 #include "nm-logging.h"
 #include "NetworkManagerUtils.h"
@@ -140,20 +141,33 @@ translate_mm_error (GError *error)
 
 	if (dbus_g_error_has_name (error, MM_MODEM_CONNECT_ERROR_NO_CARRIER))
 		reason = NM_DEVICE_STATE_REASON_MODEM_NO_CARRIER;
-	if (dbus_g_error_has_name (error, MM_MODEM_CONNECT_ERROR_NO_DIALTONE))
-		reason = NM_DEVICE_STATE_REASON_MODEM_DIAL_TIMEOUT;
-	if (dbus_g_error_has_name (error, MM_MODEM_CONNECT_ERROR_BUSY))
+	else if (dbus_g_error_has_name (error, MM_MODEM_CONNECT_ERROR_NO_DIALTONE))
+		reason = NM_DEVICE_STATE_REASON_MODEM_NO_DIAL_TONE;
+	else if (dbus_g_error_has_name (error, MM_MODEM_CONNECT_ERROR_BUSY))
 		reason = NM_DEVICE_STATE_REASON_MODEM_BUSY;
-	if (dbus_g_error_has_name (error, MM_MODEM_CONNECT_ERROR_NO_ANSWER))
+	else if (dbus_g_error_has_name (error, MM_MODEM_CONNECT_ERROR_NO_ANSWER))
 		reason = NM_DEVICE_STATE_REASON_MODEM_DIAL_TIMEOUT;
-	if (dbus_g_error_has_name (error, MM_MODEM_ERROR_NETWORK_NOT_ALLOWED))
+	else if (dbus_g_error_has_name (error, MM_MODEM_ERROR_NETWORK_NOT_ALLOWED))
 		reason = NM_DEVICE_STATE_REASON_GSM_REGISTRATION_DENIED;
-	if (dbus_g_error_has_name (error, MM_MODEM_ERROR_NETWORK_TIMEOUT))
+	else if (dbus_g_error_has_name (error, MM_MODEM_ERROR_NETWORK_TIMEOUT))
 		reason = NM_DEVICE_STATE_REASON_GSM_REGISTRATION_TIMEOUT;
-	if (dbus_g_error_has_name (error, MM_MODEM_ERROR_NO_NETWORK))
+	else if (dbus_g_error_has_name (error, MM_MODEM_ERROR_NO_NETWORK))
 		reason = NM_DEVICE_STATE_REASON_GSM_REGISTRATION_NOT_SEARCHING;
+	else if (dbus_g_error_has_name (error, MM_MODEM_ERROR_SIM_NOT_INSERTED))
+		reason = NM_DEVICE_STATE_REASON_GSM_SIM_NOT_INSERTED;
+	else if (dbus_g_error_has_name (error, MM_MODEM_ERROR_SIM_PIN))
+		reason = NM_DEVICE_STATE_REASON_GSM_SIM_PIN_REQUIRED;
+	else if (dbus_g_error_has_name (error, MM_MODEM_ERROR_SIM_PUK))
+		reason = NM_DEVICE_STATE_REASON_GSM_SIM_PUK_REQUIRED;
+	else if (dbus_g_error_has_name (error, MM_MODEM_ERROR_SIM_WRONG))
+		reason = NM_DEVICE_STATE_REASON_GSM_SIM_WRONG;
+	else {
+		/* unable to map the ModemManager error to a NM_DEVICE_STATE_REASON */
+		nm_log_dbg (LOGD_MB, "unmapped dbus error detected: '%s'", dbus_g_error_get_name (error));
+		reason = NM_DEVICE_STATE_REASON_UNKNOWN;
+	}
 
-	/* FIXME: We have only GSM error messages here, and we have no idea which 
+	/* FIXME: We have only GSM error messages here, and we have no idea which
 	   activation state failed. Reasons like:
 	   NM_DEVICE_STATE_REASON_MODEM_DIAL_FAILED,
 	   NM_DEVICE_STATE_REASON_MODEM_INIT_FAILED,
@@ -162,9 +176,6 @@ translate_mm_error (GError *error)
 	   NM_DEVICE_STATE_REASON_GSM_PIN_CHECK_FAILED
 	   are not used.
 	*/
-	else
-		reason = NM_DEVICE_STATE_REASON_UNKNOWN;
-
 	return reason;
 }
 
@@ -257,6 +268,7 @@ static void
 stage1_pin_done (DBusGProxy *proxy, DBusGProxyCall *call_id, gpointer user_data)
 {
 	NMModemGsm *self = NM_MODEM_GSM (user_data);
+	NMDeviceStateReason reason;
 	GError *error = NULL;
 
 	if (dbus_g_proxy_end_call (proxy, call_id, &error, G_TYPE_INVALID)) {
@@ -266,9 +278,14 @@ stage1_pin_done (DBusGProxy *proxy, DBusGProxyCall *call_id, gpointer user_data)
 		nm_log_warn (LOGD_MB, "GSM PIN unlock failed: (%d) %s",
 		             error ? error->code : -1,
 		             error && error->message ? error->message : "(unknown)");
-		g_error_free (error);
 
-		g_signal_emit_by_name (self, NM_MODEM_PREPARE_RESULT, FALSE, NM_DEVICE_STATE_REASON_MODEM_INIT_FAILED);
+		/* try to translate the error reason */
+		reason = translate_mm_error (error);
+		if (reason == NM_DEVICE_STATE_REASON_UNKNOWN)
+			reason = NM_DEVICE_STATE_REASON_MODEM_INIT_FAILED;
+
+		g_signal_emit_by_name (self, NM_MODEM_PREPARE_RESULT, FALSE, reason);
+		g_error_free (error);
 	}
 }
 
@@ -301,6 +318,7 @@ static void
 stage1_enable_done (DBusGProxy *proxy, DBusGProxyCall *call_id, gpointer user_data)
 {
 	NMModemGsm *self = NM_MODEM_GSM (user_data);
+	NMDeviceStateReason reason;
 	GError *error = NULL;
 
 	if (dbus_g_proxy_end_call (proxy, call_id, &error, G_TYPE_INVALID))
@@ -312,8 +330,13 @@ stage1_enable_done (DBusGProxy *proxy, DBusGProxyCall *call_id, gpointer user_da
 
 		if (dbus_g_error_has_name (error, MM_MODEM_ERROR_SIM_PIN))
 			handle_enable_pin_required (self);
-		else
-			g_signal_emit_by_name (self, NM_MODEM_PREPARE_RESULT, FALSE, NM_DEVICE_STATE_REASON_MODEM_INIT_FAILED);
+		else {
+			/* try to translate the error reason */
+			reason = translate_mm_error (error);
+			if (reason == NM_DEVICE_STATE_REASON_UNKNOWN)
+				reason = NM_DEVICE_STATE_REASON_MODEM_INIT_FAILED;
+			g_signal_emit_by_name (self, NM_MODEM_PREPARE_RESULT, FALSE, reason);
+		}
 
 		g_error_free (error);
 	}
@@ -327,7 +350,7 @@ create_connect_properties (NMConnection *connection)
 	GHashTable *properties;
 	const char *str;
 
-	setting = NM_SETTING_GSM (nm_connection_get_setting (connection, NM_TYPE_SETTING_GSM));
+	setting = nm_connection_get_setting_gsm (connection);
 	properties = value_hash_create ();
 
 	str = nm_setting_gsm_get_number (setting);
@@ -429,7 +452,7 @@ real_get_best_auto_connection (NMModem *modem,
 		NMConnection *connection = NM_CONNECTION (iter->data);
 		NMSettingConnection *s_con;
 
-		s_con = (NMSettingConnection *) nm_connection_get_setting (connection, NM_TYPE_SETTING_CONNECTION);
+		s_con = nm_connection_get_setting_connection (connection);
 		g_assert (s_con);
 
 		if (!nm_setting_connection_get_autoconnect (s_con))
@@ -451,7 +474,7 @@ real_check_connection_compatible (NMModem *modem,
 	NMSettingConnection *s_con;
 	NMSettingGsm *s_gsm;
 
-	s_con = NM_SETTING_CONNECTION (nm_connection_get_setting (connection, NM_TYPE_SETTING_CONNECTION));
+	s_con = nm_connection_get_setting_connection (connection);
 	g_assert (s_con);
 
 	if (strcmp (nm_setting_connection_get_connection_type (s_con), NM_SETTING_GSM_SETTING_NAME)) {
@@ -461,7 +484,7 @@ real_check_connection_compatible (NMModem *modem,
 		return FALSE;
 	}
 
-	s_gsm = NM_SETTING_GSM (nm_connection_get_setting (connection, NM_TYPE_SETTING_GSM));
+	s_gsm = nm_connection_get_setting_gsm (connection);
 	if (!s_gsm) {
 		g_set_error (error,
 		             NM_GSM_ERROR, NM_GSM_ERROR_CONNECTION_INVALID,
@@ -479,8 +502,9 @@ real_complete_connection (NMModem *modem,
                           GError **error)
 {
 	NMSettingGsm *s_gsm;
+	NMSettingPPP *s_ppp;
 
-	s_gsm = (NMSettingGsm *) nm_connection_get_setting (connection, NM_TYPE_SETTING_GSM);
+	s_gsm = nm_connection_get_setting_gsm (connection);
 	if (!s_gsm || !nm_setting_gsm_get_apn (s_gsm)) {
 		/* Need an APN at least */
 		g_set_error_literal (error,
@@ -492,6 +516,16 @@ real_complete_connection (NMModem *modem,
 
 	if (!nm_setting_gsm_get_number (s_gsm))
 		g_object_set (G_OBJECT (s_gsm), NM_SETTING_GSM_NUMBER, "*99#", NULL);
+
+	s_ppp = nm_connection_get_setting_ppp (connection);
+	if (!s_ppp) {
+		s_ppp = (NMSettingPPP *) nm_setting_ppp_new ();
+		g_object_set (G_OBJECT (s_ppp),
+		              NM_SETTING_PPP_LCP_ECHO_FAILURE, 5,
+		              NM_SETTING_PPP_LCP_ECHO_INTERVAL, 30,
+		              NULL);
+		nm_connection_add_setting (connection, NM_SETTING (s_ppp));
+	}
 
 	nm_utils_complete_generic (connection,
 	                           NM_SETTING_GSM_SETTING_NAME,
@@ -511,7 +545,7 @@ real_get_user_pass (NMModem *modem,
 {
 	NMSettingGsm *s_gsm;
 
-	s_gsm = (NMSettingGsm *) nm_connection_get_setting (connection, NM_TYPE_SETTING_GSM);
+	s_gsm = nm_connection_get_setting_gsm (connection);
 	if (!s_gsm)
 		return FALSE;
 

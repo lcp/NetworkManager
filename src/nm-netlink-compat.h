@@ -16,6 +16,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  *
  * Copyright (C) 2011 Caixa Magica Software.
+ * Copyright (C) 2011 Red Hat, Inc.
  */
 
 #ifndef NM_NETLINK_COMPAT_H
@@ -68,7 +69,7 @@ __rtnl_link_alloc_cache (struct nl_sock *h, struct nl_cache **cache)
 
 /* functions with similar prototypes */
 #define nlmsg_datalen nlmsg_len
-#endif
+#endif  /* HAVE_LIBNL2 */
 
 
 /* libnl-1.0 compat functions */
@@ -202,6 +203,46 @@ __nl_cache_include (struct nl_cache *cache, struct nl_object *obj, change_func_t
 #define NLE_NOACCESS            27
 #define NLE_PERM                28
 #define NLE_PKTLOC_FILE         29
-#endif
+
+#endif  /* HAVE_LIBNL1 */
+
+/* Stuff that only libnl3 has */
+#if defined(HAVE_LIBNL1) || defined(HAVE_LIBNL2)
+
+static inline int
+rtnl_link_bond_add (struct nl_sock *h, const char *name, void *data)
+{
+	/* Bonding only in libnl3 */
+	return -NLE_OPNOTSUPP;
+}
+
+static inline int
+rtnl_link_get_kernel (struct nl_sock *h, int f, const char *name, struct rtnl_link **out_link)
+{
+	/* Bonding only in libnl3 */
+	return -NLE_OPNOTSUPP;
+}
+
+static inline char *
+rtnl_link_get_type (struct rtnl_link *rtnl_link)
+{
+	/* Bonding only in libnl3 */
+	return NULL;
+}
+
+static inline int
+rtnl_link_bond_enslave_ifindex (struct nl_sock *h, int master_ifidx, int slave_ifidx)
+{
+	/* Bonding only in libnl3 */
+	return -NLE_OPNOTSUPP;
+}
+
+static inline int
+rtnl_link_bond_release_ifindex (struct nl_sock *h, int slave_ifidx)
+{
+	/* Bonding only in libnl3 */
+	return -NLE_OPNOTSUPP;
+}
+#endif  /* HAVE_LIBNL1 || HAVE_LIBNL2 */
 
 #endif /* NM_NETLINK_COMPAT_H */

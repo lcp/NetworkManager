@@ -22,6 +22,8 @@
 #include <glib.h>
 #include <dbus/dbus-glib.h>
 #include <string.h>
+#include <netinet/ether.h>
+#include <linux/if_infiniband.h>
 
 #include "nm-test-helpers.h"
 #include <nm-utils.h>
@@ -849,6 +851,9 @@ test_connection_diff_a_only (void)
 			{ NM_SETTING_CONNECTION_AUTOCONNECT, NM_SETTING_DIFF_RESULT_IN_A },
 			{ NM_SETTING_CONNECTION_READ_ONLY,   NM_SETTING_DIFF_RESULT_IN_A },
 			{ NM_SETTING_CONNECTION_PERMISSIONS, NM_SETTING_DIFF_RESULT_IN_A },
+			{ NM_SETTING_CONNECTION_ZONE,        NM_SETTING_DIFF_RESULT_IN_A },
+			{ NM_SETTING_CONNECTION_MASTER,      NM_SETTING_DIFF_RESULT_IN_A },
+			{ NM_SETTING_CONNECTION_SLAVE_TYPE,  NM_SETTING_DIFF_RESULT_IN_A },
 			{ NULL, NM_SETTING_DIFF_RESULT_UNKNOWN }
 		} },
 		{ NM_SETTING_WIRED_SETTING_NAME, {
@@ -916,7 +921,7 @@ test_connection_diff_different (void)
 {
 	NMConnection *a, *b;
 	GHashTable *out_diffs = NULL;
-	NMSetting *s_ip4;
+	NMSettingIP4Config *s_ip4;
 	gboolean same;
 	const DiffSetting settings[] = {
 		{ NM_SETTING_IP4_CONFIG_SETTING_NAME, {
@@ -927,7 +932,7 @@ test_connection_diff_different (void)
 
 	a = new_test_connection ();
 	b = nm_connection_duplicate (a);
-	s_ip4 = nm_connection_get_setting (a, NM_TYPE_SETTING_IP4_CONFIG);
+	s_ip4 = nm_connection_get_setting_ip4_config (a);
 	g_assert (s_ip4);
 	g_object_set (G_OBJECT (s_ip4),
 	              NM_SETTING_IP4_CONFIG_METHOD, NM_SETTING_IP4_CONFIG_METHOD_MANUAL,
@@ -968,7 +973,7 @@ test_connection_diff_no_secrets (void)
 	b = nm_connection_duplicate (a);
 
 	/* Add a secret to B */
-	s_pppoe = nm_connection_get_setting (b, NM_TYPE_SETTING_PPPOE);
+	s_pppoe = NM_SETTING (nm_connection_get_setting_pppoe (b));
 	g_assert (s_pppoe);
 	g_object_set (G_OBJECT (s_pppoe),
 	              NM_SETTING_PPPOE_PASSWORD, "secretpassword",
@@ -1295,6 +1300,47 @@ test_setting_compare_vpn_secrets (NMSettingSecretFlags secret_flags,
 	g_assert (success);
 }
 
+static void
+test_hwaddr_aton_ether_normal (void)
+{
+	guint8 buf[100];
+	guint8 expected[ETH_ALEN] = { 0x00, 0x11, 0x22, 0x33, 0x44, 0x55 };
+
+	g_assert (nm_utils_hwaddr_aton ("00:11:22:33:44:55", ARPHRD_ETHER, buf) != NULL);
+	g_assert (memcmp (buf, expected, sizeof (expected)) == 0);
+}
+
+static void
+test_hwaddr_aton_ib_normal (void)
+{
+	guint8 buf[100];
+	const char *source = "00:11:22:33:44:55:66:77:88:99:01:12:23:34:45:56:67:78:89:90";
+	guint8 expected[INFINIBAND_ALEN] = { 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66,
+		0x77, 0x88, 0x99, 0x01, 0x12, 0x23, 0x34, 0x45, 0x56, 0x67, 0x78, 0x89,
+		0x90 };
+
+	g_assert (nm_utils_hwaddr_aton (source, ARPHRD_INFINIBAND, buf) != NULL);
+	g_assert (memcmp (buf, expected, sizeof (expected)) == 0);
+}
+
+static void
+test_hwaddr_aton_no_leading_zeros (void)
+{
+	guint8 buf[100];
+	guint8 expected[ETH_ALEN] = { 0x00, 0x1A, 0x2B, 0x03, 0x44, 0x05 };
+
+	g_assert (nm_utils_hwaddr_aton ("0:1a:2B:3:44:5", ARPHRD_ETHER, buf) != NULL);
+	g_assert (memcmp (buf, expected, sizeof (expected)) == 0);
+}
+
+static void
+test_hwaddr_aton_malformed (void)
+{
+	guint8 buf[100];
+
+	g_assert (nm_utils_hwaddr_aton ("0:1a:2B:3:a@%%", ARPHRD_ETHER, buf) == NULL);
+}
+
 int main (int argc, char **argv)
 {
 	GError *error = NULL;
@@ -1335,6 +1381,11 @@ int main (int argc, char **argv)
 	test_connection_diff_no_secrets ();
 	test_connection_good_base_types ();
 	test_connection_bad_base_types ();
+
+	test_hwaddr_aton_ether_normal ();
+	test_hwaddr_aton_ib_normal ();
+	test_hwaddr_aton_no_leading_zeros ();
+	test_hwaddr_aton_malformed ();
 
 	base = g_path_get_basename (argv[0]);
 	fprintf (stdout, "%s: SUCCESS\n", base);

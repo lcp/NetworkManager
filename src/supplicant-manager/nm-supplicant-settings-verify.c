@@ -15,7 +15,7 @@
  * with this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  *
- * Copyright (C) 2006 - 2008 Red Hat, Inc.
+ * Copyright (C) 2006 - 2012 Red Hat, Inc.
  */
 
 #include <glib.h>
@@ -44,6 +44,10 @@ static gboolean validate_type_bytes   (const struct Opt * opt,
                                        const char * value,
                                        const guint32 len);
 
+static gboolean validate_type_utf8    (const struct Opt *opt,
+                                       const char * value,
+                                       const guint32 len);
+
 static gboolean validate_type_keyword (const struct Opt * opt,
                                        const char * value,
                                        const guint32 len);
@@ -58,6 +62,7 @@ struct validate_entry {
 static const struct validate_entry validate_table[] = {
 	{ TYPE_INT,     validate_type_int     },
 	{ TYPE_BYTES,   validate_type_bytes   },
+	{ TYPE_UTF8,    validate_type_utf8    },
 	{ TYPE_KEYWORD, validate_type_keyword },
 };
 
@@ -73,7 +78,9 @@ const char * eap_allowed[] =      { "LEAP", "MD5", "TLS", "PEAP", "TTLS", "SIM",
 
 const char * phase1_allowed[] =   {"peapver=0", "peapver=1", "peaplabel=1",
                                     "peap_outer_success=0", "include_tls_length=1",
-                                    "sim_min_num_chal=3", NULL };
+                                    "sim_min_num_chal=3", "fast_provisioning=0",
+                                    "fast_provisioning=1", "fast_provisioning=2",
+                                    "fast_provisioning=3", NULL };
 const char * phase2_allowed[] =   {"auth=PAP", "auth=CHAP", "auth=MSCHAP",
                                    "auth=MSCHAPV2", "auth=GTC", "auth=OTP",
                                    "auth=MD5", "auth=TLS", "autheap=MD5",
@@ -100,7 +107,7 @@ static const struct Opt opt_table[] = {
 	{ "eapol_flags",        TYPE_INT,     0, 3, FALSE,  NULL },
 	{ "eap",                TYPE_KEYWORD, 0, 0, FALSE,  eap_allowed },
 	{ "identity",           TYPE_BYTES,   0, 0, FALSE,  NULL },
-	{ "password",           TYPE_BYTES,   0, 0, FALSE,  NULL },
+	{ "password",           TYPE_UTF8,    0, 0, FALSE,  NULL },
 	{ "ca_path",            TYPE_BYTES,   0, 0, FALSE,  NULL },
 	{ "subject_match",      TYPE_BYTES,   0, 0, FALSE,  NULL },
 	{ "altsubject_match",   TYPE_BYTES,   0, 0, FALSE,  NULL },
@@ -129,6 +136,7 @@ static const struct Opt opt_table[] = {
 	{ "fragment_size",      TYPE_INT,     1, 2000, FALSE,  NULL },
 	{ "proactive_key_caching", TYPE_INT,  0, 1, FALSE,  NULL },
 	{ "bgscan",             TYPE_BYTES,   0, 0, FALSE,  NULL },
+	{ "pac_file",           TYPE_BYTES,   0, 1024, FALSE,  NULL },
 };
 
 
@@ -168,6 +176,26 @@ validate_type_bytes (const struct Opt * opt,
 
 	check_len = opt->int_high ? opt->int_high : 255;
 	if (len > check_len)
+		return FALSE;
+
+	return TRUE;
+}
+
+static gboolean
+validate_type_utf8 (const struct Opt *opt,
+                    const char * value,
+                    const guint32 len)
+{
+	guint32 check_len;
+
+	g_return_val_if_fail (opt != NULL, FALSE);
+	g_return_val_if_fail (value != NULL, FALSE);
+
+	check_len = opt->int_high ? opt->int_high : 255;
+	/* Note that we deliberately don't validate the UTF-8, because
+	   some "UTF-8" fields, such as 8021x.password, do not actually
+	   have to be valid UTF-8 */
+	if (g_utf8_strlen (value, len) > check_len)
 		return FALSE;
 
 	return TRUE;

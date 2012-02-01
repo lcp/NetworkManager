@@ -416,7 +416,7 @@ mac_address_writer (GKeyFile *file,
 	GByteArray *array;
 	const char *setting_name = nm_setting_get_name (setting);
 	char *mac;
-	struct ether_addr tmp;
+	int type;
 
 	g_return_if_fail (G_VALUE_HOLDS (value, DBUS_TYPE_G_UCHAR_ARRAY));
 
@@ -424,15 +424,16 @@ mac_address_writer (GKeyFile *file,
 	if (!array)
 		return;
 
-	if (array->len != ETH_ALEN) {
+	type = nm_utils_hwaddr_type (array->len);
+	if (type < 0) {
 		g_warning ("%s: invalid %s / %s MAC address length %d",
 		           __func__, setting_name, key, array->len);
 		return;
 	}
 
-	memcpy (tmp.ether_addr_octet, array->data, ETH_ALEN);
-	mac = ether_ntoa (&tmp);
+	mac = nm_utils_hwaddr_ntoa (array->data, type);
 	g_key_file_set_string (file, setting_name, key, mac);
+	g_free (mac);
 }
 
 static void
@@ -530,6 +531,31 @@ ssid_writer (GKeyFile *file,
 		g_key_file_set_integer_list (file, setting_name, key, tmp_array, array->len);
 		g_free (tmp_array);
 	}
+}
+
+static void
+password_raw_writer (GKeyFile *file,
+                     const char *keyfile_dir,
+                     const char *uuid,
+                     NMSetting *setting,
+                     const char *key,
+                     const GValue *value)
+{
+	const char *setting_name = nm_setting_get_name (setting);
+	GByteArray *array;
+	int i, *tmp_array;
+
+	g_return_if_fail (G_VALUE_HOLDS (value, DBUS_TYPE_G_UCHAR_ARRAY));
+
+	array = (GByteArray *) g_value_get_boxed (value);
+	if (!array || !array->len)
+		return;
+
+	tmp_array = g_new (gint, array->len);
+	for (i = 0; i < array->len; i++)
+		tmp_array[i] = (int) array->data[i];
+	g_key_file_set_integer_list (file, setting_name, key, tmp_array, array->len);
+	g_free (tmp_array);
 }
 
 typedef struct ObjectType {
@@ -686,7 +712,7 @@ cert_writer (GKeyFile *file,
 	}
 	g_return_if_fail (objtype != NULL);
 
-	scheme = objtypes->scheme_func (NM_SETTING_802_1X (setting));
+	scheme = objtype->scheme_func (NM_SETTING_802_1X (setting));
 	if (scheme == NM_SETTING_802_1X_CK_SCHEME_PATH) {
 		path = objtype->path_func (NM_SETTING_802_1X (setting));
 		g_assert (path);
@@ -799,9 +825,15 @@ static KeyWriter key_writers[] = {
 	{ NM_SETTING_BLUETOOTH_SETTING_NAME,
 	  NM_SETTING_BLUETOOTH_BDADDR,
 	  mac_address_writer },
+	{ NM_SETTING_INFINIBAND_SETTING_NAME,
+	  NM_SETTING_INFINIBAND_MAC_ADDRESS,
+	  mac_address_writer },
 	{ NM_SETTING_WIRELESS_SETTING_NAME,
 	  NM_SETTING_WIRELESS_SSID,
 	  ssid_writer },
+	{ NM_SETTING_802_1X_SETTING_NAME,
+	  NM_SETTING_802_1X_PASSWORD_RAW,
+	  password_raw_writer },
 	{ NM_SETTING_802_1X_SETTING_NAME,
 	  NM_SETTING_802_1X_CA_CERT,
 	  cert_writer },

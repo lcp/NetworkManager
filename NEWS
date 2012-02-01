@@ -1,7 +1,33 @@
 ==============================================
+NetworkManager-0.9.4
+Overview of changes since NetworkManager-0.9.2
+==============================================
+
+This is a new stable release of NetworkManager.  Notable changes include:
+
+* Better handling of WiFi devices via nl80211 when available (instead of WEXT)
+* IP configuration is now non-blocking; waiting for IPv6 RA no longer blocks
+    the device from activating if IPv4 is ready and vice versa
+* Addded support for firewall "zones" via FirewallD
+* Added basic support for bonded interfaces
+* WiFi connections are no longer locked to a specific MAC address if they are
+    "locally administered" addresses (ie, 02:::::)
+* New state change reasons have been added for mobile broadband PIN errors
+* Agent-owned secrets are now sent to agents for newly created connections
+* Support for non-UTF8-encoded 802.1x passwords has been added
+* libnm-glib now fetches some properties more aggressively (like active
+    connections, access points, etc)
+* Added basic support for IP-over-Infiniband interfaces
+* Added support for device plugins and converted WiMAX support to a plugin for
+    easier packaging and simpler dependencies
+
+
+==============================================
 NetworkManager-0.9.2
 Overview of changes since NetworkManager-0.9.0
 ==============================================
+
+This is a new stable release of NetworkManager.  Notable changes include:
 
 * Support for libnl2 and libnl3 and various memory leak fixes
 * Bug fixes for the ifnet config plugin
@@ -22,6 +48,11 @@ Overview of changes since NetworkManager-0.9.0
 * Fix handling of SSIDs in the keyfile plugin
 * Fix some GObject Introspection annotations in libnm-glib and libnm-util
 * Fix setting hostnames from DHCP
+* Fixes for building with recent GLib versions
+* Don't update routing and DNS until a device is managed
+* Fix bug causing IPv6 RA-provided routes to be ignored
+* Fix possible wrong handling of 'keyfile' connection certificates
+* Correct Shared connection IP address range to be as documented
 
 
 ==============================================

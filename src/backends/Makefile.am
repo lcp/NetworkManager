@@ -2,13 +2,16 @@ INCLUDES = \
 	-I${top_srcdir} \
 	-I${top_srcdir}/src/logging \
 	-I${top_srcdir}/include \
+	-I${top_builddir}/include \
 	-I${top_srcdir}/src \
 	-I${top_srcdir}/libnm-util
 
 noinst_LTLIBRARIES = libnmbackend.la
 
-libnmbackend_la_SOURCES = NetworkManagerGeneric.c	\
-				NetworkManagerGeneric.h
+libnmbackend_la_SOURCES = \
+	NetworkManagerGeneric.c \
+	NetworkManagerGeneric.h \
+	nm-backend.h
 
 libnmbackend_la_LIBADD =
 

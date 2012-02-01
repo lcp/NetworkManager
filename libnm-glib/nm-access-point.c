@@ -359,9 +359,9 @@ nm_access_point_get_strength (NMAccessPoint *ap)
 }
 
 /**
- * nm_access_point_filter_connections:
+ * nm_access_point_connection_valid:
  * @ap: an #NMAccessPoint to validate @connection against
- * @connections: an #NMConnection to validate against @ap
+ * @connection: an #NMConnection to validate against @ap
  *
  * Validates a given connection against a given WiFi access point to ensure that
  * the connection may be activated with that AP.  The connection must match the
@@ -474,6 +474,11 @@ nm_access_point_connection_valid (NMAccessPoint *ap, NMConnection *connection)
  * return connections which may be activated with the access point.  Any
  * returned connections will match the @ap's SSID and (if given) BSSID and
  * other attributes like security settings, channel, etc.
+ *
+ * To obtain the list of connections that are compatible with this access point,
+ * use nm_remote_settings_list_connections() and then filter the returned list
+ * for a given #NMDevice using nm_device_filter_connections() and finally
+ * filter that list with this function.
  *
  * Returns: (transfer container) (element-type NetworkManager.Connection): a
  * list of #NMConnection objects that could be activated with the given @ap.

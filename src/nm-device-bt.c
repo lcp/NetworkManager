@@ -31,7 +31,6 @@
 #include "nm-bluez-common.h"
 #include "nm-dbus-manager.h"
 #include "nm-device-bt.h"
-#include "nm-device-interface.h"
 #include "nm-device-private.h"
 #include "nm-logging.h"
 #include "nm-marshal.h"
@@ -155,7 +154,7 @@ get_connection_bt_type (NMConnection *connection)
 	NMSettingBluetooth *s_bt;
 	const char *bt_type;
 
-	s_bt = (NMSettingBluetooth *) nm_connection_get_setting (connection, NM_TYPE_SETTING_BLUETOOTH);
+	s_bt = nm_connection_get_setting_bluetooth (connection);
 	if (!s_bt)
 		return NM_BT_CAPABILITY_NONE;
 
@@ -183,7 +182,7 @@ real_get_best_auto_connection (NMDevice *device,
 		NMSettingConnection *s_con;
 		guint32 bt_type;
 
-		s_con = (NMSettingConnection *) nm_connection_get_setting (connection, NM_TYPE_SETTING_CONNECTION);
+		s_con = nm_connection_get_setting_connection (connection);
 		g_assert (s_con);
 
 		if (!nm_setting_connection_get_autoconnect (s_con))
@@ -214,7 +213,7 @@ real_check_connection_compatible (NMDevice *device,
 	int addr_match = FALSE;
 	guint32 bt_type;
 
-	s_con = NM_SETTING_CONNECTION (nm_connection_get_setting (connection, NM_TYPE_SETTING_CONNECTION));
+	s_con = nm_connection_get_setting_connection (connection);
 	g_assert (s_con);
 
 	if (strcmp (nm_setting_connection_get_connection_type (s_con), NM_SETTING_BLUETOOTH_SETTING_NAME)) {
@@ -224,7 +223,7 @@ real_check_connection_compatible (NMDevice *device,
 		return FALSE;
 	}
 
-	s_bt = NM_SETTING_BLUETOOTH (nm_connection_get_setting (connection, NM_TYPE_SETTING_BLUETOOTH));
+	s_bt = nm_connection_get_setting_bluetooth (connection);
 	if (!s_bt) {
 		g_set_error (error,
 		             NM_BT_ERROR, NM_BT_ERROR_CONNECTION_INVALID,
@@ -276,12 +275,12 @@ real_complete_connection (NMDevice *device,
 	NMSettingPPP *s_ppp;
 	const char *format = NULL, *preferred = NULL;
 
-	s_gsm = (NMSettingGsm *) nm_connection_get_setting (connection, NM_TYPE_SETTING_GSM);
-	s_cdma = (NMSettingCdma *) nm_connection_get_setting (connection, NM_TYPE_SETTING_CDMA);
-	s_serial = (NMSettingSerial *) nm_connection_get_setting (connection, NM_TYPE_SETTING_SERIAL);
-	s_ppp = (NMSettingPPP *) nm_connection_get_setting (connection, NM_TYPE_SETTING_PPP);
+	s_gsm = nm_connection_get_setting_gsm (connection);
+	s_cdma = nm_connection_get_setting_cdma (connection);
+	s_serial = nm_connection_get_setting_serial (connection);
+	s_ppp = nm_connection_get_setting_ppp (connection);
 
-	s_bt = (NMSettingBluetooth *) nm_connection_get_setting (connection, NM_TYPE_SETTING_BLUETOOTH);
+	s_bt = nm_connection_get_setting_bluetooth (connection);
 	if (!s_bt) {
 		s_bt = (NMSettingBluetooth *) nm_setting_bluetooth_new ();
 		nm_connection_add_setting (connection, NM_SETTING (s_bt));
@@ -421,16 +420,16 @@ ppp_failed (NMModem *modem, NMDeviceStateReason reason, gpointer user_data)
 {
 	NMDevice *device = NM_DEVICE (user_data);
 
-	switch (nm_device_interface_get_state (NM_DEVICE_INTERFACE (device))) {
+	switch (nm_device_get_state (device)) {
 	case NM_DEVICE_STATE_PREPARE:
 	case NM_DEVICE_STATE_CONFIG:
 	case NM_DEVICE_STATE_NEED_AUTH:
-	case NM_DEVICE_STATE_IP_CHECK:
-	case NM_DEVICE_STATE_SECONDARIES:
-	case NM_DEVICE_STATE_ACTIVATED:
 		nm_device_state_changed (device, NM_DEVICE_STATE_FAILED, reason);
 		break;
 	case NM_DEVICE_STATE_IP_CONFIG:
+	case NM_DEVICE_STATE_IP_CHECK:
+	case NM_DEVICE_STATE_SECONDARIES:
+	case NM_DEVICE_STATE_ACTIVATED:
 		if (nm_device_ip_config_should_fail (device, FALSE)) {
 			nm_device_state_changed (device,
 			                         NM_DEVICE_STATE_FAILED,
@@ -478,7 +477,7 @@ modem_prepare_result (NMModem *modem,
 	NMDevice *device = NM_DEVICE (user_data);
 	NMDeviceState state;
 
-	state = nm_device_interface_get_state (NM_DEVICE_INTERFACE (device));
+	state = nm_device_get_state (device);
 	g_return_if_fail (state == NM_DEVICE_STATE_CONFIG || state == NM_DEVICE_STATE_NEED_AUTH);
 
 	if (success) {
@@ -526,10 +525,8 @@ modem_ip4_config_result (NMModem *self,
                          gpointer user_data)
 {
 	NMDevice *device = NM_DEVICE (user_data);
-	NMDeviceState state;
 
-	state = nm_device_interface_get_state (NM_DEVICE_INTERFACE (device));
-	g_return_if_fail (state == NM_DEVICE_STATE_IP_CONFIG);
+	g_return_if_fail (nm_device_activate_ip4_state_in_conf (device) == TRUE);
 
 	if (error) {
 		nm_log_warn (LOGD_MB | LOGD_IP4 | LOGD_BT,
@@ -543,7 +540,7 @@ modem_ip4_config_result (NMModem *self,
 		if (iface)
 			nm_device_set_ip_iface (device, iface);
 
-		nm_device_activate_schedule_stage4_ip4_config_get (device);
+		nm_device_activate_schedule_ip4_config_result (device, config);
 	}
 }
 
@@ -613,7 +610,7 @@ nm_device_bt_modem_added (NMDeviceBt *self,
 	/* Can only accept the modem in stage2, but since the interface matched
 	 * what we were expecting, don't let anything else claim the modem either.
 	 */
-	state = nm_device_interface_get_state (NM_DEVICE_INTERFACE (self));
+	state = nm_device_get_state (NM_DEVICE (self));
 	if (state != NM_DEVICE_STATE_CONFIG) {
 		nm_log_warn (LOGD_BT | LOGD_MB,
 		             "(%s): modem found but device not in correct state (%d)",
@@ -847,15 +844,11 @@ static NMActStageReturn
 real_act_stage2_config (NMDevice *device, NMDeviceStateReason *reason)
 {
 	NMDeviceBtPrivate *priv = NM_DEVICE_BT_GET_PRIVATE (device);
-	NMActRequest *req;
 	NMDBusManager *dbus_mgr;
 	DBusGConnection *g_connection;
 	gboolean dun = FALSE;
 
-	req = nm_device_get_act_request (device);
-	g_assert (req);
-
-	priv->bt_type = get_connection_bt_type (nm_act_request_get_connection (req));
+	priv->bt_type = get_connection_bt_type (nm_device_get_connection (device));
 	if (priv->bt_type == NM_BT_CAPABILITY_NONE) {
 		// FIXME: set a reason code
 		return NM_ACT_STAGE_RETURN_FAILURE;
@@ -920,7 +913,9 @@ real_act_stage2_config (NMDevice *device, NMDeviceStateReason *reason)
 }
 
 static NMActStageReturn
-real_act_stage3_ip4_config_start (NMDevice *device, NMDeviceStateReason *reason)
+real_act_stage3_ip4_config_start (NMDevice *device,
+                                  NMIP4Config **out_config,
+                                  NMDeviceStateReason *reason)
 {
 	NMDeviceBtPrivate *priv = NM_DEVICE_BT_GET_PRIVATE (device);
 	NMActStageReturn ret;
@@ -931,27 +926,7 @@ real_act_stage3_ip4_config_start (NMDevice *device, NMDeviceStateReason *reason)
 		                                        NM_DEVICE_CLASS (nm_device_bt_parent_class),
 		                                        reason);
 	} else
-		ret = NM_DEVICE_CLASS (nm_device_bt_parent_class)->act_stage3_ip4_config_start (device, reason);
-
-	return ret;
-}
-
-static NMActStageReturn
-real_act_stage4_get_ip4_config (NMDevice *device,
-                                NMIP4Config **config,
-                                NMDeviceStateReason *reason)
-{
-	NMDeviceBtPrivate *priv = NM_DEVICE_BT_GET_PRIVATE (device);
-	NMActStageReturn ret;
-
-	if (priv->bt_type == NM_BT_CAPABILITY_DUN) {
-		ret = nm_modem_stage4_get_ip4_config (NM_DEVICE_BT_GET_PRIVATE (device)->modem,
-		                                      device,
-		                                      NM_DEVICE_CLASS (nm_device_bt_parent_class),
-		                                      config,
-		                                      reason);
-	} else
-		ret = NM_DEVICE_CLASS (nm_device_bt_parent_class)->act_stage4_get_ip4_config (device, config, reason);
+		ret = NM_DEVICE_CLASS (nm_device_bt_parent_class)->act_stage3_ip4_config_start (device, out_config, reason);
 
 	return ret;
 }
@@ -1037,15 +1012,15 @@ nm_device_bt_new (const char *udi,
 	g_return_val_if_fail (capabilities != NM_BT_CAPABILITY_NONE, NULL);
 
 	device = (NMDevice *) g_object_new (NM_TYPE_DEVICE_BT,
-	                                    NM_DEVICE_INTERFACE_UDI, udi,
-	                                    NM_DEVICE_INTERFACE_IFACE, bdaddr,
-	                                    NM_DEVICE_INTERFACE_DRIVER, "bluez",
+	                                    NM_DEVICE_UDI, udi,
+	                                    NM_DEVICE_IFACE, bdaddr,
+	                                    NM_DEVICE_DRIVER, "bluez",
 	                                    NM_DEVICE_BT_HW_ADDRESS, bdaddr,
 	                                    NM_DEVICE_BT_NAME, name,
 	                                    NM_DEVICE_BT_CAPABILITIES, capabilities,
-	                                    NM_DEVICE_INTERFACE_MANAGED, managed,
-	                                    NM_DEVICE_INTERFACE_TYPE_DESC, "Bluetooth",
-	                                    NM_DEVICE_INTERFACE_DEVICE_TYPE, NM_DEVICE_TYPE_BT,
+	                                    NM_DEVICE_MANAGED, managed,
+	                                    NM_DEVICE_TYPE_DESC, "Bluetooth",
+	                                    NM_DEVICE_DEVICE_TYPE, NM_DEVICE_TYPE_BT,
 	                                    NULL);
 	if (device)
 		g_signal_connect (device, "state-changed", G_CALLBACK (device_state_changed), device);
@@ -1148,7 +1123,6 @@ nm_device_bt_class_init (NMDeviceBtClass *klass)
 	device_class->deactivate = real_deactivate;
 	device_class->act_stage2_config = real_act_stage2_config;
 	device_class->act_stage3_ip4_config_start = real_act_stage3_ip4_config_start;
-	device_class->act_stage4_get_ip4_config = real_act_stage4_get_ip4_config;
 	device_class->check_connection_compatible = real_check_connection_compatible;
 	device_class->complete_connection = real_complete_connection;
 

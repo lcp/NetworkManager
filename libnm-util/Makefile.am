@@ -1,6 +1,6 @@
 SUBDIRS=. tests
 
-INCLUDES = -I${top_srcdir} -I${top_srcdir}/include
+INCLUDES = -I${top_srcdir} -I${top_srcdir}/include -I${top_builddir}/include
 
 lib_LTLIBRARIES=libnm-util.la
 
@@ -15,7 +15,9 @@ libnm_util_include_HEADERS = 		\
 	nm-setting.h			\
 	nm-setting-8021x.h		\
 	nm-setting-bluetooth.h		\
+	nm-setting-bond.h		\
 	nm-setting-connection.h		\
+	nm-setting-infiniband.h		\
 	nm-setting-ip4-config.h		\
 	nm-setting-ip6-config.h		\
 	nm-setting-ppp.h		\
@@ -44,7 +46,9 @@ libnm_util_la_csources = \
 	nm-setting.c			\
 	nm-setting-8021x.c		\
 	nm-setting-bluetooth.c		\
+	nm-setting-bond.c		\
 	nm-setting-connection.c		\
+	nm-setting-infiniband.c		\
 	nm-setting-ip4-config.c		\
 	nm-setting-ip6-config.c		\
 	nm-setting-ppp.c		\

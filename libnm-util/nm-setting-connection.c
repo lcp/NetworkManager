@@ -72,6 +72,7 @@ nm_setting_connection_error_get_type (void)
 			ENUM_ENTRY (NM_SETTING_CONNECTION_ERROR_INVALID_PROPERTY, "InvalidProperty"),
 			ENUM_ENTRY (NM_SETTING_CONNECTION_ERROR_MISSING_PROPERTY, "MissingProperty"),
 			ENUM_ENTRY (NM_SETTING_CONNECTION_ERROR_TYPE_SETTING_NOT_FOUND, "TypeSettingNotFound"),
+			ENUM_ENTRY (NM_SETTING_CONNECTION_ERROR_IP_CONFIG_NOT_ALLOWED, "IpConfigNotAllowed"),
 			{ 0, 0, 0 }
 		};
 		etype = g_enum_register_static ("NMSettingConnectionError", values);
@@ -97,10 +98,13 @@ typedef struct {
 	char *id;
 	char *uuid;
 	char *type;
+	char *master;
+	char *slave_type;
 	GSList *permissions; /* list of Permission structs */
 	gboolean autoconnect;
 	guint64 timestamp;
 	gboolean read_only;
+	char *zone;
 } NMSettingConnectionPrivate;
 
 enum {
@@ -112,6 +116,9 @@ enum {
 	PROP_AUTOCONNECT,
 	PROP_TIMESTAMP,
 	PROP_READ_ONLY,
+	PROP_ZONE,
+	PROP_MASTER,
+	PROP_SLAVE_TYPE,
 
 	LAST_PROP
 };
@@ -478,6 +485,72 @@ nm_setting_connection_get_read_only (NMSettingConnection *setting)
 	return NM_SETTING_CONNECTION_GET_PRIVATE (setting)->read_only;
 }
 
+/**
+ * nm_setting_connection_get_zone:
+ * @setting: the #NMSettingConnection
+ *
+ * Returns the #NMSettingConnection:zone property of the connection.
+ *
+ * Returns: the trust level of a connection
+ **/
+const char *
+nm_setting_connection_get_zone (NMSettingConnection *setting)
+{
+	g_return_val_if_fail (NM_IS_SETTING_CONNECTION (setting), NULL);
+
+	return NM_SETTING_CONNECTION_GET_PRIVATE (setting)->zone;
+}
+
+/**
+ * nm_setting_connection_get_master:
+ * @setting: the #NMSettingConnection
+ *
+ * Returns the #NMSettingConnection:master property of the connection.
+ *
+ * Returns: interface name of the master device or UUID of the master
+ * connection.
+ */
+const char *
+nm_setting_connection_get_master (NMSettingConnection *setting)
+{
+	g_return_val_if_fail (NM_IS_SETTING_CONNECTION (setting), NULL);
+
+	return NM_SETTING_CONNECTION_GET_PRIVATE (setting)->master;
+}
+
+/**
+ * nm_setting_connection_get_slave_type:
+ * @setting: the #NMSettingConnection
+ *
+ * Returns the #NMSettingConnection:slave-type property of the connection.
+ *
+ * Returns: the type of slave this connection is, if any
+ */
+const char *
+nm_setting_connection_get_slave_type (NMSettingConnection *setting)
+{
+	g_return_val_if_fail (NM_IS_SETTING_CONNECTION (setting), NULL);
+
+	return NM_SETTING_CONNECTION_GET_PRIVATE (setting)->slave_type;
+}
+
+/**
+ * nm_setting_connection_is_slave_type:
+ * @setting: the #NMSettingConnection
+ * @type: the setting name (ie #NM_SETTING_BOND_SETTING_NAME) to be matched
+ * against @setting's slave type
+ *
+ * Returns: TRUE if connection is of the given slave @type
+ */
+gboolean
+nm_setting_connection_is_slave_type (NMSettingConnection *setting,
+                                     const char *type)
+{
+	g_return_val_if_fail (NM_IS_SETTING_CONNECTION (setting), FALSE);
+
+	return !g_strcmp0 (NM_SETTING_CONNECTION_GET_PRIVATE (setting)->slave_type, type);
+}
+
 static gint
 find_setting_by_name (gconstpointer a, gconstpointer b)
 {
@@ -550,6 +623,14 @@ verify (NMSetting *setting, GSList *all_settings, GError **error)
 		return FALSE;
 	}
 
+	if (priv->zone && !priv->zone[0]) {
+		g_set_error (error,
+		             NM_SETTING_CONNECTION_ERROR,
+		             NM_SETTING_CONNECTION_ERROR_INVALID_PROPERTY,
+		             NM_SETTING_CONNECTION_TYPE);
+		return FALSE;
+	}
+
 	/* Make sure the corresponding 'type' item is present */
 	if (all_settings && !g_slist_find_custom (all_settings, priv->type, find_setting_by_name)) {
 		g_set_error (error,
@@ -557,6 +638,46 @@ verify (NMSetting *setting, GSList *all_settings, GError **error)
 		             NM_SETTING_CONNECTION_ERROR_TYPE_SETTING_NOT_FOUND,
 		             NM_SETTING_CONNECTION_TYPE);
 		return FALSE;
+	}
+
+	/*
+	 * Bonding: Slaves are not allowed to have any IP configuration.
+	 */
+	if (priv->slave_type && all_settings &&
+	    !strcmp(priv->slave_type, NM_SETTING_BOND_SETTING_NAME)) {
+		GSList *list;
+
+		list = g_slist_find_custom (all_settings, NM_SETTING_IP4_CONFIG_SETTING_NAME,
+		                            find_setting_by_name);
+		if (list) {
+			NMSettingIP4Config *s_ip4 = g_slist_nth_data (list, 0);
+			g_assert (s_ip4);
+
+			if (strcmp (nm_setting_ip4_config_get_method (s_ip4),
+			            NM_SETTING_IP4_CONFIG_METHOD_DISABLED)) {
+				g_set_error (error,
+				             NM_SETTING_CONNECTION_ERROR,
+				             NM_SETTING_CONNECTION_ERROR_IP_CONFIG_NOT_ALLOWED,
+				             "No IP configuration allowed for bonding slave");
+				return FALSE;
+			}
+		}
+
+		list = g_slist_find_custom (all_settings, NM_SETTING_IP6_CONFIG_SETTING_NAME,
+		                            find_setting_by_name);
+		if (list) {
+			NMSettingIP6Config *s_ip6 = g_slist_nth_data (list, 0);
+			g_assert (s_ip6);
+
+			if (strcmp (nm_setting_ip6_config_get_method (s_ip6),
+			            NM_SETTING_IP6_CONFIG_METHOD_IGNORE)) {
+				g_set_error (error,
+				             NM_SETTING_CONNECTION_ERROR,
+				             NM_SETTING_CONNECTION_ERROR_IP_CONFIG_NOT_ALLOWED,
+				             "No IPv6 configuration allowed for bonding slave");
+				return FALSE;
+			}
+		}
 	}
 
 	return TRUE;
@@ -591,6 +712,9 @@ finalize (GObject *object)
 	g_free (priv->id);
 	g_free (priv->uuid);
 	g_free (priv->type);
+	g_free (priv->zone);
+	g_free (priv->master);
+	g_free (priv->slave_type);
 	nm_utils_slist_free (priv->permissions, (GDestroyNotify) permission_free);
 
 	G_OBJECT_CLASS (nm_setting_connection_parent_class)->finalize (object);
@@ -644,6 +768,18 @@ set_property (GObject *object, guint prop_id,
 	case PROP_READ_ONLY:
 		priv->read_only = g_value_get_boolean (value);
 		break;
+	case PROP_ZONE:
+		g_free (priv->zone);
+		priv->zone = g_value_dup_string (value);
+		break;
+	case PROP_MASTER:
+		g_free (priv->master);
+		priv->master = g_value_dup_string (value);
+		break;
+	case PROP_SLAVE_TYPE:
+		g_free (priv->slave_type);
+		priv->slave_type = g_value_dup_string (value);
+		break;
 	default:
 		G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
 		break;
@@ -688,6 +824,15 @@ get_property (GObject *object, guint prop_id,
 		break;
 	case PROP_READ_ONLY:
 		g_value_set_boolean (value, nm_setting_connection_get_read_only (setting));
+		break;
+	case PROP_ZONE:
+		g_value_set_string (value, nm_setting_connection_get_zone (setting));
+		break;
+	case PROP_MASTER:
+		g_value_set_string (value, nm_setting_connection_get_master (setting));
+		break;
+	case PROP_SLAVE_TYPE:
+		g_value_set_string (value, nm_setting_connection_get_slave_type (setting));
 		break;
 	default:
 		G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -876,4 +1021,55 @@ nm_setting_connection_class_init (NMSettingConnectionClass *setting_class)
 	                      "cannot yet write updated connections back out.",
 	                      FALSE,
 	                      G_PARAM_READWRITE | G_PARAM_CONSTRUCT | NM_SETTING_PARAM_SERIALIZE | NM_SETTING_PARAM_FUZZY_IGNORE));
+
+	/**
+	 * NMSettingConnection:zone:
+	 *
+	 * The trust level of a the connection.
+	 * Free form case-insensitive string (for example "Home", "Work", "Public").
+	 * NULL or unspecified zone means the connection will be placed in the
+	 * default zone as defined by the firewall.
+	 **/
+	g_object_class_install_property
+		(object_class, PROP_ZONE,
+		 g_param_spec_string (NM_SETTING_CONNECTION_ZONE,
+						  "Zone",
+						  "The trust level of a the connection."
+						  "Free form case-insensitive string (for example "
+						  "\"Home\", \"Work\", \"Public\").  NULL or "
+						  "unspecified zone means the connection will be "
+						  "placed in the default zone as defined by the "
+						  "firewall.",
+						  NULL,
+						  G_PARAM_READWRITE | G_PARAM_CONSTRUCT | NM_SETTING_PARAM_SERIALIZE | NM_SETTING_PARAM_FUZZY_IGNORE));
+
+	/**
+	 * NMSettingConnection:master:
+	 *
+	 * Interface name of the master device or UUID of the master connection.
+	 **/
+	g_object_class_install_property
+		(object_class, PROP_MASTER,
+		 g_param_spec_string (NM_SETTING_CONNECTION_MASTER,
+		                      "Master",
+		                      "Interface name of the master device or UUID of "
+		                      "the master connection",
+		                      NULL,
+		                      G_PARAM_READWRITE | NM_SETTING_PARAM_SERIALIZE | NM_SETTING_PARAM_FUZZY_IGNORE));
+
+	/**
+	 * NMSettingConnection:slave-type:
+	 *
+	 * Setting name describing the type of slave device (ie
+	 * #NM_SETTING_BOND_SETTING_NAME) or NULL if this connection is not a slave.
+	 **/
+	g_object_class_install_property
+		(object_class, PROP_SLAVE_TYPE,
+		 g_param_spec_string (NM_SETTING_CONNECTION_SLAVE_TYPE,
+		                      "Slave-Type",
+		                      "Setting name describing the type of slave "
+		                      "this connection is (ie, 'bond') or NULL if this "
+		                      "connection is not a slave.",
+		                      NULL,
+		                      G_PARAM_READWRITE | NM_SETTING_PARAM_SERIALIZE | NM_SETTING_PARAM_FUZZY_IGNORE));
 }

@@ -15,7 +15,7 @@
  * with this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  *
- * Copyright (C) 2006 - 2010 Red Hat, Inc.
+ * Copyright (C) 2006 - 2012 Red Hat, Inc.
  * Copyright (C) 2007 - 2008 Novell, Inc.
  */
 
@@ -312,6 +312,7 @@ get_hash_cb (gpointer key, gpointer value, gpointer user_data)
 		g_value_set_int (variant, atoi (opt->value));
 		break;
 	case TYPE_BYTES:
+	case TYPE_UTF8:
 		array = g_byte_array_sized_new (opt->len);
 		g_byte_array_append (array, (const guint8 *) opt->value, opt->len);
 		g_value_init (variant, DBUS_TYPE_G_UCHAR_ARRAY);
@@ -602,7 +603,7 @@ gboolean
 nm_supplicant_config_add_setting_wireless_security (NMSupplicantConfig *self,
                                                     NMSettingWirelessSecurity *setting,
                                                     NMSetting8021x *setting_8021x,
-                                                    const char *connection_uid)
+                                                    const char *con_uuid)
 {
 	char *value;
 	gboolean success;
@@ -611,7 +612,7 @@ nm_supplicant_config_add_setting_wireless_security (NMSupplicantConfig *self,
 
 	g_return_val_if_fail (NM_IS_SUPPLICANT_CONFIG (self), FALSE);
 	g_return_val_if_fail (setting != NULL, FALSE);
-	g_return_val_if_fail (connection_uid != NULL, FALSE);
+	g_return_val_if_fail (con_uuid != NULL, FALSE);
 
 	key_mgmt = nm_setting_wireless_security_get_key_mgmt (setting);
 	if (!add_string_val (self, key_mgmt, "key_mgmt", TRUE, FALSE))
@@ -711,7 +712,7 @@ nm_supplicant_config_add_setting_wireless_security (NMSupplicantConfig *self,
 		if (!strcmp (key_mgmt, "ieee8021x") || !strcmp (key_mgmt, "wpa-eap")) {
 		    if (!setting_8021x)
 		    	return FALSE;
-			if (!nm_supplicant_config_add_setting_8021x (self, setting_8021x, connection_uid, FALSE))
+			if (!nm_supplicant_config_add_setting_8021x (self, setting_8021x, con_uuid, FALSE))
 				return FALSE;
 		}
 
@@ -730,7 +731,7 @@ nm_supplicant_config_add_setting_wireless_security (NMSupplicantConfig *self,
 gboolean
 nm_supplicant_config_add_setting_8021x (NMSupplicantConfig *self,
                                         NMSetting8021x *setting,
-                                        const char *connection_uid,
+                                        const char *con_uuid,
                                         gboolean wired)
 {
 	char *tmp;
@@ -738,16 +739,32 @@ nm_supplicant_config_add_setting_8021x (NMSupplicantConfig *self,
 	gboolean success, added;
 	GString *phase1, *phase2;
 	const GByteArray *array;
-	gboolean peap = FALSE;
+	gboolean peap = FALSE, fast = FALSE;
 	guint32 i, num_eap;
+	gboolean fast_provisoning_allowed = FALSE;
 
 	g_return_val_if_fail (NM_IS_SUPPLICANT_CONFIG (self), FALSE);
 	g_return_val_if_fail (setting != NULL, FALSE);
-	g_return_val_if_fail (connection_uid != NULL, FALSE);
+	g_return_val_if_fail (con_uuid != NULL, FALSE);
 
 	value = nm_setting_802_1x_get_password (setting);
-	if (!add_string_val (self, value, "password", FALSE, TRUE))
-		return FALSE;
+	if (value) {
+		if (!add_string_val (self, value, "password", FALSE, TRUE))
+			return FALSE;
+	} else {
+		array = nm_setting_802_1x_get_password_raw (setting);
+		if (array) {
+			success = nm_supplicant_config_add_option (self,
+			                                           "password",
+			                                           (const char *)array->data,
+			                                           array->len,
+			                                           TRUE);
+			if (!success) {
+				nm_log_warn (LOGD_SUPPLICANT, "Error adding password-raw to supplicant config.");
+				return FALSE;
+			}
+		}
+	}
 	value = nm_setting_802_1x_get_pin (setting);
 	if (!add_string_val (self, value, "pin", FALSE, TRUE))
 		return FALSE;
@@ -763,15 +780,15 @@ nm_supplicant_config_add_setting_8021x (NMSupplicantConfig *self,
 
 	ADD_STRING_LIST_VAL (setting, 802_1x, eap_method, eap_methods, "eap", ' ', TRUE, FALSE);
 
-	/* Check for PEAP + GTC */
+	/* Check EAP method for special handling: PEAP + GTC, FAST */
 	num_eap = nm_setting_802_1x_get_num_eap_methods (setting);
 	for (i = 0; i < num_eap; i++) {
 		const char *method = nm_setting_802_1x_get_eap_method (setting, i);
 
-		if (method && (strcasecmp (method, "peap") == 0)) {
+		if (method && (strcasecmp (method, "peap") == 0))
 			peap = TRUE;
-			break;
-		}
+		if (method && (strcasecmp (method, "fast") == 0))
+			fast = TRUE;
 	}
 
 	/* When using PEAP-GTC, we're likely using Cisco kit, so we want to turn
@@ -804,6 +821,16 @@ nm_supplicant_config_add_setting_8021x (NMSupplicantConfig *self,
 		g_string_append_printf (phase1, "peaplabel=%s", nm_setting_802_1x_get_phase1_peaplabel (setting));
 	}
 
+	value = nm_setting_802_1x_get_phase1_fast_provisioning (setting);
+	if (value) {
+		if (phase1->len)
+			g_string_append_c (phase1, ' ');
+		g_string_append_printf (phase1, "fast_provisioning=%s", value);
+		
+		if (strcmp (value, "0") != 0)
+			fast_provisoning_allowed = TRUE;
+	}
+
 	if (phase1->len) {
 		if (!add_string_val (self, phase1->str, "phase1", FALSE, FALSE)) {
 			g_string_free (phase1, TRUE);
@@ -813,7 +840,7 @@ nm_supplicant_config_add_setting_8021x (NMSupplicantConfig *self,
 	g_string_free (phase1, TRUE);
 
 	phase2 = g_string_new (NULL);
-	if (nm_setting_802_1x_get_phase2_auth (setting)) {
+	if (nm_setting_802_1x_get_phase2_auth (setting) && !fast_provisoning_allowed) {
 		tmp = g_ascii_strup (nm_setting_802_1x_get_phase2_auth (setting), -1);
 		g_string_append_printf (phase2, "auth=%s", tmp);
 		g_free (tmp);
@@ -834,6 +861,32 @@ nm_supplicant_config_add_setting_8021x (NMSupplicantConfig *self,
 		}
 	}
 	g_string_free (phase2, TRUE);
+
+	/* PAC file */
+	path = nm_setting_802_1x_get_pac_file (setting);
+	if (path) {
+		if (!add_string_val (self, path, "pac_file", FALSE, FALSE))
+			return FALSE;
+	} else {
+		/* PAC file is not specified.
+		 * If provisioning is allowed, use an blob format.
+		 */
+		if (fast_provisoning_allowed) {
+			char *blob_name = g_strdup_printf ("blob://pac-blob-%s", con_uuid);
+			if (!add_string_val (self, blob_name, "pac_file", FALSE, FALSE)) {
+				g_free (blob_name);
+				return FALSE;
+			}
+			g_free (blob_name);
+		} else {
+			/* This is only error for EAP-FAST; don't disturb other methods. */
+			if (fast) {
+				nm_log_err (LOGD_SUPPLICANT, "EAP-FAST error: no PAC file provided and "
+				                              "automatic PAC provisioning is disabled.");
+				return FALSE;
+			}
+		}
+	}
 
 	/* CA path */
 	path = nm_setting_802_1x_get_ca_path (setting);
@@ -857,7 +910,7 @@ nm_supplicant_config_add_setting_8021x (NMSupplicantConfig *self,
 	switch (nm_setting_802_1x_get_ca_cert_scheme (setting)) {
 	case NM_SETTING_802_1X_CK_SCHEME_BLOB:
 		array = nm_setting_802_1x_get_ca_cert_blob (setting);
-		ADD_BLOB_VAL (array, "ca_cert", connection_uid);
+		ADD_BLOB_VAL (array, "ca_cert", con_uuid);
 		break;
 	case NM_SETTING_802_1X_CK_SCHEME_PATH:
 		path = nm_setting_802_1x_get_ca_cert_path (setting);
@@ -877,7 +930,7 @@ nm_supplicant_config_add_setting_8021x (NMSupplicantConfig *self,
 	switch (nm_setting_802_1x_get_phase2_ca_cert_scheme (setting)) {
 	case NM_SETTING_802_1X_CK_SCHEME_BLOB:
 		array = nm_setting_802_1x_get_phase2_ca_cert_blob (setting);
-		ADD_BLOB_VAL (array, "ca_cert2", connection_uid);
+		ADD_BLOB_VAL (array, "ca_cert2", con_uuid);
 		break;
 	case NM_SETTING_802_1X_CK_SCHEME_PATH:
 		path = nm_setting_802_1x_get_phase2_ca_cert_path (setting);
@@ -905,7 +958,7 @@ nm_supplicant_config_add_setting_8021x (NMSupplicantConfig *self,
 	switch (nm_setting_802_1x_get_private_key_scheme (setting)) {
 	case NM_SETTING_802_1X_CK_SCHEME_BLOB:
 		array = nm_setting_802_1x_get_private_key_blob (setting);
-		ADD_BLOB_VAL (array, "private_key", connection_uid);
+		ADD_BLOB_VAL (array, "private_key", con_uuid);
 		added = TRUE;
 		break;
 	case NM_SETTING_802_1X_CK_SCHEME_PATH:
@@ -943,7 +996,7 @@ nm_supplicant_config_add_setting_8021x (NMSupplicantConfig *self,
 			switch (nm_setting_802_1x_get_client_cert_scheme (setting)) {
 			case NM_SETTING_802_1X_CK_SCHEME_BLOB:
 				array = nm_setting_802_1x_get_client_cert_blob (setting);
-				ADD_BLOB_VAL (array, "client_cert", connection_uid);
+				ADD_BLOB_VAL (array, "client_cert", con_uuid);
 				break;
 			case NM_SETTING_802_1X_CK_SCHEME_PATH:
 				path = nm_setting_802_1x_get_client_cert_path (setting);
@@ -961,7 +1014,7 @@ nm_supplicant_config_add_setting_8021x (NMSupplicantConfig *self,
 	switch (nm_setting_802_1x_get_phase2_private_key_scheme (setting)) {
 	case NM_SETTING_802_1X_CK_SCHEME_BLOB:
 		array = nm_setting_802_1x_get_phase2_private_key_blob (setting);
-		ADD_BLOB_VAL (array, "private_key2", connection_uid);
+		ADD_BLOB_VAL (array, "private_key2", con_uuid);
 		added = TRUE;
 		break;
 	case NM_SETTING_802_1X_CK_SCHEME_PATH:
@@ -999,7 +1052,7 @@ nm_supplicant_config_add_setting_8021x (NMSupplicantConfig *self,
 			switch (nm_setting_802_1x_get_phase2_client_cert_scheme (setting)) {
 			case NM_SETTING_802_1X_CK_SCHEME_BLOB:
 				array = nm_setting_802_1x_get_phase2_client_cert_blob (setting);
-				ADD_BLOB_VAL (array, "client_cert2", connection_uid);
+				ADD_BLOB_VAL (array, "client_cert2", con_uuid);
 				break;
 			case NM_SETTING_802_1X_CK_SCHEME_PATH:
 				path = nm_setting_802_1x_get_phase2_client_cert_path (setting);

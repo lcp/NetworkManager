@@ -55,11 +55,12 @@ static void wpas_iface_scan_done (DBusGProxy *proxy,
 
 /* Signals */
 enum {
-	STATE,             /* change in the interface's state */
-	REMOVED,           /* interface was removed by the supplicant */
-	NEW_BSS,           /* interface saw a new access point from a scan */
-	SCAN_DONE,         /* wifi scan is complete */
-	CONNECTION_ERROR,  /* an error occurred during a connection request */
+	STATE,               /* change in the interface's state */
+	REMOVED,             /* interface was removed by the supplicant */
+	NEW_BSS,             /* interface saw a new access point from a scan */
+	SCAN_DONE,           /* wifi scan is complete */
+	CONNECTION_ERROR,    /* an error occurred during a connection request */
+	CREDENTIALS_REQUEST, /* 802.1x identity or password requested */
 	CERTIFICATION,     /* a RADIUS server certificate was received */
 	LAST_SIGNAL
 };
@@ -80,6 +81,7 @@ typedef struct {
 	NMDBusManager *       dbus_mgr;
 	char *                dev;
 	gboolean              is_wireless;
+	gboolean              has_credreq;  /* Whether querying 802.1x credentials is supported */
 
 	char *                object_path;
 	guint32               state;
@@ -455,6 +457,92 @@ wpas_iface_get_props (NMSupplicantInterface *self)
 	nm_supplicant_info_set_call (info, call);
 }
 
+gboolean
+nm_supplicant_interface_credentials_reply (NMSupplicantInterface *self,
+                                           const char *field,
+                                           const char *value,
+                                           GError **error)
+{
+	NMSupplicantInterfacePrivate *priv;
+
+	g_return_val_if_fail (self != NULL, FALSE);
+	g_return_val_if_fail (NM_IS_SUPPLICANT_INTERFACE (self), FALSE);
+	g_return_val_if_fail (field != NULL, FALSE);
+	g_return_val_if_fail (value != NULL, FALSE);
+
+	priv = NM_SUPPLICANT_INTERFACE_GET_PRIVATE (self);
+	g_return_val_if_fail (priv->has_credreq == TRUE, FALSE);
+
+	/* Need a network block object path */
+	g_return_val_if_fail (priv->net_path, FALSE);
+	return dbus_g_proxy_call_with_timeout (priv->iface_proxy, "NetworkReply",
+	                                       5000,
+	                                       error,
+	                                       DBUS_TYPE_G_OBJECT_PATH, priv->net_path,
+	                                       G_TYPE_STRING, field,
+	                                       G_TYPE_STRING, value,
+	                                       G_TYPE_INVALID);
+}
+
+static void
+wpas_iface_network_request (DBusGProxy *proxy,
+                            const char *object_path,
+                            const char *field,
+                            const char *message,
+                            gpointer user_data)
+{
+	NMSupplicantInterface *self = NM_SUPPLICANT_INTERFACE (user_data);
+	NMSupplicantInterfacePrivate *priv = NM_SUPPLICANT_INTERFACE_GET_PRIVATE (self);
+
+	g_return_if_fail (priv->has_credreq == TRUE);
+	g_return_if_fail (priv->net_path != NULL);
+	g_return_if_fail (g_strcmp0 (object_path, priv->net_path) == 0);
+
+	g_signal_emit (self, signals[CREDENTIALS_REQUEST], 0, field, message);
+}
+
+static void
+iface_check_netreply_cb (DBusGProxy *proxy, DBusGProxyCall *call_id, gpointer user_data)
+{
+	NMSupplicantInfo *info = (NMSupplicantInfo *) user_data;
+	NMSupplicantInterfacePrivate *priv = NM_SUPPLICANT_INTERFACE_GET_PRIVATE (info->interface);
+	GError *error = NULL;
+
+	if (   dbus_g_proxy_end_call (proxy, call_id, &error, G_TYPE_INVALID)
+	    || dbus_g_error_has_name (error, "fi.w1.wpa_supplicant1.InvalidArgs")) {
+		/* We know NetworkReply is supported if the NetworkReply method returned
+		 * successfully (which is unexpected since we sent a bogus network
+		 * object path) or if we got an "InvalidArgs" (which indicates NetworkReply
+		 * is supported).  We know it's not supported if we get an
+		 * "UnknownMethod" error.
+		 */
+		priv->has_credreq = TRUE;
+
+		nm_log_dbg (LOGD_SUPPLICANT, "Supplicant %s network credentials requests",
+			        priv->has_credreq ? "supports" : "does not support");
+	}
+	g_clear_error (&error);
+}
+
+static void
+wpas_iface_check_network_reply (NMSupplicantInterface *self)
+{
+	NMSupplicantInterfacePrivate *priv = NM_SUPPLICANT_INTERFACE_GET_PRIVATE (self);
+	NMSupplicantInfo *info;
+	DBusGProxyCall *call;
+
+	info = nm_supplicant_info_new (self, priv->props_proxy, priv->other_pcalls);
+	call = dbus_g_proxy_begin_call (priv->iface_proxy, "NetworkReply",
+	                                iface_check_netreply_cb,
+	                                info,
+	                                nm_supplicant_info_destroy,
+	                                DBUS_TYPE_G_OBJECT_PATH, "/foobaraasdfasdf",
+	                                G_TYPE_STRING, "foobar",
+	                                G_TYPE_STRING, "foobar",
+	                                G_TYPE_INVALID);
+	nm_supplicant_info_set_call (info, call);
+}
+
 static void
 interface_add_done (NMSupplicantInterface *self, char *path)
 {
@@ -498,6 +586,18 @@ interface_add_done (NMSupplicantInterface *self, char *path)
 	                             self,
 	                             NULL);
 
+	dbus_g_object_register_marshaller (_nm_marshal_VOID__STRING_STRING_STRING,
+	                                   G_TYPE_NONE,
+	                                   DBUS_TYPE_G_OBJECT_PATH, G_TYPE_STRING, G_TYPE_STRING,
+	                                   G_TYPE_INVALID);
+	dbus_g_proxy_add_signal (priv->iface_proxy, "NetworkRequest",
+	                         DBUS_TYPE_G_OBJECT_PATH, G_TYPE_STRING, G_TYPE_STRING,
+	                         G_TYPE_INVALID);
+	dbus_g_proxy_connect_signal (priv->iface_proxy, "NetworkRequest",
+	                             G_CALLBACK (wpas_iface_network_request),
+	                             self,
+	                             NULL);
+
 	dbus_g_object_register_marshaller (g_cclosure_marshal_VOID__BOXED,
                                            G_TYPE_NONE,
 	                                   DBUS_TYPE_G_MAP_OF_VARIANT,
@@ -516,6 +616,9 @@ interface_add_done (NMSupplicantInterface *self, char *path)
 	                                               DBUS_INTERFACE_PROPERTIES);
 	/* Get initial properties */
 	wpas_iface_get_props (self);
+
+	/* Check whether NetworkReply is supported */
+	wpas_iface_check_network_reply (self);
 
 	set_state (self, NM_SUPPLICANT_INTERFACE_STATE_READY);
 }
@@ -1231,6 +1334,16 @@ nm_supplicant_interface_class_init (NMSupplicantInterfaceClass *klass)
 		              NULL, NULL,
 		              _nm_marshal_VOID__STRING_STRING,
 		              G_TYPE_NONE, 2, G_TYPE_STRING, G_TYPE_STRING);
+
+	signals[CREDENTIALS_REQUEST] =
+		g_signal_new (NM_SUPPLICANT_INTERFACE_CREDENTIALS_REQUEST,
+		              G_OBJECT_CLASS_TYPE (object_class),
+		              G_SIGNAL_RUN_LAST,
+		              G_STRUCT_OFFSET (NMSupplicantInterfaceClass, credentials_request),
+		              NULL, NULL,
+		              _nm_marshal_VOID__STRING_STRING,
+		              G_TYPE_NONE, 2, G_TYPE_STRING, G_TYPE_STRING);
+
 	signals[CERTIFICATION] =
 		g_signal_new ("certification",
 		              G_OBJECT_CLASS_TYPE (object_class),

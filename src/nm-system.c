@@ -21,6 +21,7 @@
  * Copyright (C) January, 1998 Sergei Viznyuk <sv@phystech.com>
  */
 
+#include <config.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
@@ -41,6 +42,8 @@
 #include <glib.h>
 #include <ctype.h>
 #include <linux/if.h>
+#include <linux/sockios.h>
+#include <linux/if_bonding.h>
 
 #include "nm-system.h"
 #include "nm-device.h"
@@ -56,6 +59,10 @@
 #include <netlink/netlink.h>
 #include <netlink/utils.h>
 #include <netlink/route/link.h>
+
+#ifdef HAVE_LIBNL3
+#include <netlink/route/link/bonding.h>
+#endif
 
 static void nm_system_device_set_priority (int ifindex,
                                            NMIP4Config *config,
@@ -657,15 +664,8 @@ nm_system_iface_set_up (int ifindex,
 	return success;
 }
 
-/**
- * nm_system_iface_is_up:
- * @ifindex: interface index
- *
- * Returns: %TRUE if the interface is up, %FALSE if it was down or the check
- * failed.
- **/
-gboolean
-nm_system_iface_is_up (int ifindex)
+guint32
+nm_system_iface_get_flags (int ifindex)
 {
 	struct rtnl_link *l;
 	guint32 flags;
@@ -686,7 +686,20 @@ nm_system_iface_is_up (int ifindex)
 	flags = rtnl_link_get_flags (l);
 	rtnl_link_put (l);
 
-	return flags & IFF_UP;
+	return flags;
+}
+
+/**
+ * nm_system_iface_is_up:
+ * @ifindex: interface index
+ *
+ * Returns: %TRUE if the interface is up, %FALSE if it was down or the check
+ * failed.
+ **/
+gboolean
+nm_system_iface_is_up (int ifindex)
+{
+	return nm_system_iface_get_flags (ifindex) & IFF_UP;
 }
 
 /**
@@ -836,7 +849,7 @@ replace_default_ip4_route (int ifindex, guint32 gw, guint32 mss)
 	struct rtnl_route *route = NULL;
 	struct nl_sock *nlh;
 	int err = -1;
-	int dst=0;
+	int dst = 0;
 
 	g_return_val_if_fail (ifindex > 0, -ENODEV);
 
@@ -851,6 +864,8 @@ replace_default_ip4_route (int ifindex, guint32 gw, guint32 mss)
 
 	/* Add the new default route */
 	err = nm_netlink_route_add (route, AF_INET, &dst, 0, &gw, NLM_F_REPLACE);
+	if (err == -NLE_EXIST)
+		err = 0;
 
 	rtnl_route_put (route);
 	return err;
@@ -1020,7 +1035,7 @@ replace_default_ip6_route (int ifindex, const struct in6_addr *gw)
 	g_return_val_if_fail (route != NULL, -ENOMEM);
 
 	/* Add the new default route */
-	nm_netlink_route_add(route, AF_INET6, NULL, 0, gw, NLM_F_REPLACE);
+	err = nm_netlink_route_add (route, AF_INET6, NULL, 0, gw, NLM_F_REPLACE);
 	if (err == -NLE_EXIST) {
 		/* FIXME: even though we use NLM_F_REPLACE the kernel won't replace
 		 * the route if it's the same.  Should try to remove it first, then
@@ -1049,6 +1064,9 @@ nm_system_replace_default_ip6_route (int ifindex, const struct in6_addr *gw)
 
 	err = replace_default_ip6_route (ifindex, gw);
 	if (err == 0)
+		return TRUE;
+
+	if (err == -NLE_EXIST)
 		return TRUE;
 
 	iface = nm_netlink_index_to_iface (ifindex);
@@ -1202,3 +1220,317 @@ nm_system_device_set_priority (int ifindex,
 		rtnl_route_put (found);
 	}
 }
+
+static gboolean
+set_bond_attr (const char *iface, const char *attr, const char *value)
+{
+	char file[FILENAME_MAX];
+	gboolean ret;
+
+	snprintf (file, sizeof(file), "/sys/class/net/%s/bonding/%s",
+	          iface, attr);
+
+	ret = nm_utils_do_sysctl (file, value);
+	if (!ret)
+		nm_log_warn (LOGD_HW, "(%s): failed to set bonding attribute "
+		             "'%s' to '%s'", iface, attr, value);
+
+	return ret;
+}
+
+static gboolean
+set_bond_attr_int (const char *iface, const char *attr,
+                   guint32 value)
+{
+	char buf[128];
+
+	snprintf (buf, sizeof(buf), "%u", value);
+
+	return set_bond_attr (iface, attr, buf);
+}
+
+gboolean
+nm_system_apply_bonding_config (NMSettingBond *s_bond)
+{
+	const char *name, *val;
+
+	name = nm_setting_bond_get_interface_name (s_bond);
+	g_assert (name);
+
+	if ((val = nm_setting_bond_get_mode (s_bond)))
+		set_bond_attr (name, "mode", val);
+
+	/*
+	 * FIXME:
+	 *
+	 * ifup-eth contains code to append targets if the value is prefixed
+	 * with '+':
+	 *
+	 *  if [ "${key}" = "arp_ip_target" -a "${value:0:1}" != "+" ]; then
+	 *  OLDIFS=$IFS;
+	 *  IFS=',';
+	 *  for arp_ip in $value; do
+	 *      if ! grep -q $arp_ip /sys/class/net/${DEVICE}/bonding/$key; then
+	 *          echo +$arp_ip > /sys/class/net/${DEVICE}/bonding/$key
+	 *      fi
+	 *  done
+	 *
+	 * Not sure if this is actually being used and it seems dangerous as
+	 * the result is pretty much unforeseeable.
+	 */
+	if ((val = nm_setting_bond_get_arp_ip_target (s_bond)))
+		set_bond_attr (name, "arp_ip_target", val);
+
+	set_bond_attr_int (name, "miimon", nm_setting_bond_get_miimon (s_bond));
+	set_bond_attr_int (name, "downdelay", nm_setting_bond_get_downdelay (s_bond));
+	set_bond_attr_int (name, "updelay", nm_setting_bond_get_updelay (s_bond));
+	set_bond_attr_int (name, "arp_interval", nm_setting_bond_get_arp_interval (s_bond));
+
+	return TRUE;
+}
+
+/**
+ * nm_system_add_bonding_master:
+ * @setting: bonding setting
+ *
+ * Adds a virtual bonding device if it does not exist yet.
+ *
+ * Returns: %TRUE on success, %FALSE on failure
+ */
+gboolean
+nm_system_add_bonding_master (NMSettingBond *setting)
+{
+	struct nl_sock *sock;
+	const char *name;
+	int err;
+
+	sock = nm_netlink_get_default_handle ();
+	name = nm_setting_bond_get_interface_name (setting);
+	g_assert (name);
+
+	/* Existing bonding devices with matching name will be reused */
+	err = rtnl_link_bond_add (sock, name, NULL);
+	if (err < 0) {
+		nm_log_err (LOGD_DEVICE, "(%s): error %d returned from "
+		            "rtnl_link_bond_add(): %s",
+		            name, err, nl_geterror (err));
+		return FALSE;
+	}
+
+	nm_system_apply_bonding_config (setting);
+
+	return TRUE;
+}
+
+static gboolean
+nm_system_iface_compat_enslave (NMDevice *slave, const char *master_name)
+{
+	struct ifreq ifr;
+	int fd;
+	gboolean ret = FALSE;
+
+	memset (&ifr, 0, sizeof (ifr));
+
+	fd = socket (PF_INET, SOCK_DGRAM, 0);
+	if (fd < 0) {
+		nm_log_err (LOGD_DEVICE, "couldn't open control socket.");
+		return FALSE;
+	}
+
+	strncpy (ifr.ifr_name, master_name, IFNAMSIZ);
+	strncpy (ifr.ifr_slave, nm_device_get_iface (slave), IFNAMSIZ);
+
+	if (ioctl (fd, SIOCBONDENSLAVE, &ifr) < 0 &&
+	    ioctl (fd, BOND_ENSLAVE_OLD, &ifr) < 0) {
+		nm_log_err (LOGD_DEVICE, "(%s): error enslaving %s: %d (%s)",
+		            master_name, nm_device_get_iface (slave),
+		            errno, strerror (errno));
+		goto errout;
+	}
+
+	ret = TRUE;
+
+errout:
+	close (fd);
+
+	return ret;
+}
+
+/**
+ * nm_system_iface_enslave:
+ * @slave: Slave device
+ * @master: Master device
+ *
+ * Enslaves the 'slave' to 'master. This function targets implementing a
+ * generic interface to attaching all kinds of slaves to masters. Currently
+ * only bonding is properly supported due to the backwards compatibility
+ * function being bonding specific.
+ *
+ * The slave device needs to be down as a prerequirement.
+ *
+ * Returns: %TRUE on success, or %FALSE
+ */
+gboolean
+nm_system_iface_enslave (NMDevice *slave, NMDevice *master)
+{
+	struct nl_sock *sock;
+	const char *master_name;
+	int err, master_ifindex, slave_ifindex;
+
+	master_name = nm_device_get_iface (master);
+	if (!master_name)
+		return FALSE;
+
+	sock = nm_netlink_get_default_handle ();
+
+	master_ifindex = nm_netlink_iface_to_index (master_name);
+	g_assert (master_ifindex > 0);
+
+	if (!(nm_system_iface_get_flags (master_ifindex) & IFF_MASTER)) {
+		nm_log_err (LOGD_DEVICE, "(%s): interface is not a master", master_name);
+		return FALSE;
+	}
+
+	slave_ifindex = nm_device_get_ifindex (slave);
+	g_assert (slave_ifindex > 0);
+
+	g_assert (!nm_system_iface_is_up (slave_ifindex));
+
+	if (nm_system_iface_get_flags (slave_ifindex) & IFF_SLAVE) {
+		nm_log_err (LOGD_DEVICE, "(%s): %s is already a slave",
+		            master_name, nm_device_get_iface (slave));
+		return FALSE;
+	}
+
+	err = rtnl_link_bond_enslave_ifindex (sock, master_ifindex, slave_ifindex);
+	if (err == -NLE_OPNOTSUPP)
+		return nm_system_iface_compat_enslave (slave, master_name);
+
+	if (err < 0) {
+		nm_log_err (LOGD_DEVICE, "(%s): error enslaving %s: %d (%s)",
+		            master_name, nm_device_get_iface (slave),
+		            err, nl_geterror (err));
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+static gboolean
+nm_system_iface_compat_release (NMDevice *device, const char *master_name)
+{
+	struct ifreq ifr;
+	int fd;
+	gboolean ret = FALSE;
+
+	memset (&ifr, 0, sizeof (ifr));
+
+	fd = socket (PF_INET, SOCK_DGRAM, 0);
+	if (fd < 0) {
+		nm_log_err (LOGD_DEVICE, "couldn't open control socket.");
+		return FALSE;
+	}
+
+	strncpy (ifr.ifr_name, master_name, IFNAMSIZ);
+	strncpy (ifr.ifr_slave, nm_device_get_iface (device), IFNAMSIZ);
+
+	if (ioctl (fd, SIOCBONDRELEASE, &ifr) < 0 &&
+	    ioctl (fd, BOND_RELEASE_OLD, &ifr) < 0) {
+		nm_log_err (LOGD_DEVICE, "(%s): error releasing slave %s: %d (%s)",
+		            master_name, nm_device_get_iface (device),
+		            errno, strerror (errno));
+		goto errout;
+	}
+
+	ret = TRUE;
+
+errout:
+	close (fd);
+
+	return ret;
+}
+
+/**
+ * nm_system_iface_release:
+ * @slave: Slave device
+ * @maser: Master device
+ *
+ * Releases the 'slave' which is attached to 'master. This function targets
+ * implementing a generic interface to releasing all kinds of slaves. Currently
+ * only bonding is properly supported due to the backwards compatibility
+ * function being bonding specific.
+ *
+ * Returns: %TRUE on success, or %FALSE
+ */
+gboolean
+nm_system_iface_release (NMDevice *slave, NMDevice *master)
+{
+	struct nl_sock *sock;
+	const char *master_name;
+	int err, slave_ifindex;
+
+	master_name = nm_device_get_iface (master);
+	if (!master_name)
+		return TRUE;
+
+	sock = nm_netlink_get_default_handle ();
+
+	slave_ifindex = nm_device_get_ifindex (slave);
+	g_assert (slave_ifindex > 0);
+
+	/* Only release if this is actually a slave */
+	if (!(nm_system_iface_get_flags (slave_ifindex) & IFF_SLAVE))
+		goto out;
+
+	err = rtnl_link_bond_release_ifindex (sock, slave_ifindex);
+	if (err == -NLE_OPNOTSUPP)
+		return nm_system_iface_compat_release (slave, master_name);
+
+	if (err < 0) {
+		nm_log_err (LOGD_DEVICE, "(%s): error releasing slave %s: %d (%s)",
+		            master_name, nm_device_get_iface (slave),
+		            err, nl_geterror (err));
+		return FALSE;
+	}
+
+out:
+	return TRUE;
+}
+
+/**
+ * nm_system_get_iface_type:
+ * @name: name of interface
+ *
+ * Lookup the type of an interface
+ *
+ * Returns: Interface type (NM_IFACE_TYPE_*) or NM_IFACE_TYPE_UNSPEC.
+ **/
+int
+nm_system_get_iface_type (const char *name)
+{
+	struct rtnl_link *result;
+	struct nl_sock *nlh;
+	char *type;
+	int res = NM_IFACE_TYPE_UNSPEC;
+
+	nlh = nm_netlink_get_default_handle ();
+	if (!nlh)
+		goto out;
+
+	if (rtnl_link_get_kernel (nlh, 0, name, &result) < 0)
+		goto out;
+
+	type = rtnl_link_get_type (result);
+
+	if (!g_strcmp0 (type, "bond"))
+		res = NM_IFACE_TYPE_BOND;
+	else if (!g_strcmp0 (type, "vlan"))
+		res = NM_IFACE_TYPE_VLAN;
+	else if (!g_strcmp0 (type, "dummy"))
+		res = NM_IFACE_TYPE_DUMMY;
+
+	rtnl_link_put (result);
+out:
+	return res;
+}
+

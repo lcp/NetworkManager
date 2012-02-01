@@ -1,6 +1,7 @@
 [encoding: UTF-8]
 # List of source files containing translatable strings.
 # Please keep this file sorted alphabetically.
+cli/src/common.c
 cli/src/connections.c
 cli/src/devices.c
 cli/src/network-manager.c
@@ -22,6 +23,7 @@ src/modem-manager/nm-modem-cdma.c
 src/modem-manager/nm-modem-gsm.c
 src/nm-device-bt.c
 src/nm-device-ethernet.c
+src/nm-device-infiniband.c
 src/nm-device-olpc-mesh.c
 src/nm-manager.c
 src/nm-netlink-monitor.c

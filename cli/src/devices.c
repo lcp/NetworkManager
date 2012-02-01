@@ -14,7 +14,7 @@
  * with this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  *
- * (C) Copyright 2010 - 2011 Red Hat, Inc.
+ * (C) Copyright 2010 - 2012 Red Hat, Inc.
  */
 
 #include "config.h"
@@ -23,10 +23,6 @@
 #include <string.h>
 #include <stdlib.h>
 #include <errno.h>
-
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
 
 #include <glib.h>
 #include <glib/gi18n.h>
@@ -41,6 +37,7 @@
 #if WITH_WIMAX
 #include <nm-device-wimax.h>
 #endif
+#include <nm-device-infiniband.h>
 #include <nm-utils.h>
 #include <nm-setting-ip4-config.h>
 #include <nm-setting-ip6-config.h>
@@ -56,8 +53,10 @@
 #if WITH_WIMAX
 #include <nm-setting-wimax.h>
 #endif
+#include <nm-setting-infiniband.h>
 
 #include "utils.h"
+#include "common.h"
 #include "devices.h"
 
 
@@ -82,32 +81,39 @@ static NmcOutputField nmc_fields_dev_list_sections[] = {
 	{"WIRED-PROPERTIES",  N_("WIRED-PROPERTIES"),  0, NULL, 0},  /* 4 */
 	{"WIMAX-PROPERTIES",  N_("WIMAX-PROPERTIES"),  0, NULL, 0},  /* 5 */
 	{"NSP",               N_("NSP"),               0, NULL, 0},  /* 6 */
-	{"IP4-SETTINGS",      N_("IP4-SETTINGS"),      0, NULL, 0},  /* 7 */
-	{"IP4-DNS",           N_("IP4-DNS"),           0, NULL, 0},  /* 8 */
-	{"IP6-SETTINGS",      N_("IP6-SETTINGS"),      0, NULL, 0},  /* 9 */
-	{"IP6-DNS",           N_("IP6-DNS"),           0, NULL, 0},  /* 10 */
+	{"IP4",               N_("IP4"),               0, NULL, 0},  /* 7 */
+	{"DHCP4",             N_("DHCP4"),             0, NULL, 0},  /* 8 */
+	{"IP6",               N_("IP6"),               0, NULL, 0},  /* 9 */
+	{"DHCP6",             N_("DHCP6"),             0, NULL, 0},  /* 10 */
 	{NULL,                NULL,                    0, NULL, 0}
 };
 #if WITH_WIMAX
-#define NMC_FIELDS_DEV_LIST_SECTIONS_ALL     "GENERAL,CAPABILITIES,WIFI-PROPERTIES,AP,WIRED-PROPERTIES,WIMAX-PROPERTIES,NSP,IP4-SETTINGS,IP4-DNS,IP6-SETTINGS,IP6-DNS"
-#define NMC_FIELDS_DEV_LIST_SECTIONS_COMMON  "GENERAL,CAPABILITIES,WIFI-PROPERTIES,AP,WIRED-PROPERTIES,WIMAX-PROPERTIES,NSP,IP4-SETTINGS,IP4-DNS,IP6-SETTINGS,IP6-DNS"
+#define NMC_FIELDS_DEV_LIST_SECTIONS_ALL     "GENERAL,CAPABILITIES,WIFI-PROPERTIES,AP,WIRED-PROPERTIES,WIMAX-PROPERTIES,NSP,IP4,DHCP4,IP6,DHCP6"
+#define NMC_FIELDS_DEV_LIST_SECTIONS_COMMON  "GENERAL,CAPABILITIES,WIFI-PROPERTIES,AP,WIRED-PROPERTIES,WIMAX-PROPERTIES,NSP,IP4,DHCP4,IP6,DHCP6"
 #else
-#define NMC_FIELDS_DEV_LIST_SECTIONS_ALL     "GENERAL,CAPABILITIES,WIFI-PROPERTIES,AP,WIRED-PROPERTIES,IP4-SETTINGS,IP4-DNS,IP6-SETTINGS,IP6-DNS"
-#define NMC_FIELDS_DEV_LIST_SECTIONS_COMMON  "GENERAL,CAPABILITIES,WIFI-PROPERTIES,AP,WIRED-PROPERTIES,IP4-SETTINGS,IP4-DNS,IP6-SETTINGS,IP6-DNS"
+#define NMC_FIELDS_DEV_LIST_SECTIONS_ALL     "GENERAL,CAPABILITIES,WIFI-PROPERTIES,AP,WIRED-PROPERTIES,IP4,DHCP4,IP6,DHCP6"
+#define NMC_FIELDS_DEV_LIST_SECTIONS_COMMON  "GENERAL,CAPABILITIES,WIFI-PROPERTIES,AP,WIRED-PROPERTIES,IP4,DHCP4,IP6,DHCP6"
 #endif
 
 /* Available fields for 'dev list' - GENERAL part */
 static NmcOutputField nmc_fields_dev_list_general[] = {
-	{"NAME",       N_("NAME"),        10, NULL, 0},  /* 0 */
-	{"DEVICE",     N_("DEVICE"),      10, NULL, 0},  /* 1 */
-	{"TYPE",       N_("TYPE"),        17, NULL, 0},  /* 2 */
-	{"DRIVER",     N_("DRIVER"),      10, NULL, 0},  /* 3 */
-	{"HWADDR",     N_("HWADDR"),      19, NULL, 0},  /* 4 */
-	{"STATE",      N_("STATE"),       14, NULL, 0},  /* 5 */
-	{NULL,         NULL,               0, NULL, 0}
+	{"NAME",              N_("NAME"),              10, NULL, 0},  /* 0 */
+	{"DEVICE",            N_("DEVICE"),            10, NULL, 0},  /* 1 */
+	{"TYPE",              N_("TYPE"),              17, NULL, 0},  /* 2 */
+	{"VENDOR",            N_("VENDOR"),            20, NULL, 0},  /* 3 */
+	{"PRODUCT",           N_("PRODUCT"),           50, NULL, 0},  /* 4 */
+	{"DRIVER",            N_("DRIVER"),             9, NULL, 0},  /* 5 */
+	{"HWADDR",            N_("HWADDR"),            19, NULL, 0},  /* 6 */
+	{"STATE",             N_("STATE"),             14, NULL, 0},  /* 7 */
+	{"UDI",               N_("UDI"),               64, NULL, 0},  /* 8 */
+	{"IP-IFACE",          N_("IP-IFACE"),          10, NULL, 0},  /* 9 */
+	{"NM-MANAGED",        N_("NM-MANAGED"),        15, NULL, 0},  /* 10 */
+	{"FIRMWARE-MISSING",  N_("FIRMWARE-MISSING"),  18, NULL, 0},  /* 11 */
+	{"CONNECTION",        N_("CONNECTION"),        51, NULL, 0},  /* 12 */
+	{NULL, NULL, 0, NULL, 0}
 };
-#define NMC_FIELDS_DEV_LIST_GENERAL_ALL     "NAME,DEVICE,TYPE,DRIVER,HWADDR,STATE"
-#define NMC_FIELDS_DEV_LIST_GENERAL_COMMON  "NAME,DEVICE,TYPE,DRIVER,HWADDR,STATE"
+#define NMC_FIELDS_DEV_LIST_GENERAL_ALL     "NAME,DEVICE,TYPE,VENDOR,PRODUCT,DRIVER,HWADDR,STATE,UDI,IP-IFACE,NM-MANAGED,FIRMWARE-MISSING,CONNECTION"
+#define NMC_FIELDS_DEV_LIST_GENERAL_COMMON  "NAME,DEVICE,TYPE,VENDOR,PRODUCT,DRIVER,HWADDR,STATE"
 
 /* Available fields for 'dev list' - CAPABILITIES part */
 static NmcOutputField nmc_fields_dev_list_cap[] = {
@@ -156,46 +162,6 @@ static NmcOutputField nmc_fields_dev_list_wimax_prop[] = {
 #define NMC_FIELDS_DEV_LIST_WIMAX_PROP_ALL     "NAME,CTR-FREQ,RSSI,CINR,TX-POW,BSID"
 #define NMC_FIELDS_DEV_LIST_WIMAX_PROP_COMMON  "NAME,CTR-FREQ,RSSI,CINR,TX-POW,BSID"
 #endif
-
-/* Available fields for 'dev list' - IPv4 settings part */
-static NmcOutputField nmc_fields_dev_list_ip4_settings[] = {
-	{"NAME",       N_("NAME"),        15, NULL, 0},  /* 0 */
-	{"ADDRESS",    N_("ADDRESS"),     15, NULL, 0},  /* 1 */
-	{"PREFIX",     N_("PREFIX"),      20, NULL, 0},  /* 2 */
-	{"GATEWAY",    N_("GATEWAY"),     20, NULL, 0},  /* 3 */
-	{NULL,         NULL,               0, NULL, 0}
-};
-#define NMC_FIELDS_DEV_LIST_IP4_SETTINGS_ALL     "NAME,ADDRESS,PREFIX,GATEWAY"
-#define NMC_FIELDS_DEV_LIST_IP4_SETTINGS_COMMON  "NAME,ADDRESS,PREFIX,GATEWAY"
-
-/* Available fields for 'dev list' - IPv6 settings part */
-static NmcOutputField nmc_fields_dev_list_ip6_settings[] = {
-	{"NAME",       N_("NAME"),        15, NULL, 0},  /* 0 */
-	{"ADDRESS",    N_("ADDRESS"),     15, NULL, 0},  /* 1 */
-	{"PREFIX",     N_("PREFIX"),      20, NULL, 0},  /* 2 */
-	{"GATEWAY",    N_("GATEWAY"),     20, NULL, 0},  /* 3 */
-	{NULL,         NULL,               0, NULL, 0}
-};
-#define NMC_FIELDS_DEV_LIST_IP6_SETTINGS_ALL     "NAME,ADDRESS,PREFIX,GATEWAY"
-#define NMC_FIELDS_DEV_LIST_IP6_SETTINGS_COMMON  "NAME,ADDRESS,PREFIX,GATEWAY"
-
-/* Available fields for 'dev list' - IPv4 settings DNS part */
-static NmcOutputField nmc_fields_dev_list_ip4_dns[] = {
-	{"NAME",       N_("NAME"),        15, NULL, 0},  /* 0 */
-	{"DNS",        N_("DNS"),         17, NULL, 0},  /* 1 */
-	{NULL,         NULL,               0, NULL, 0}
-};
-#define NMC_FIELDS_DEV_LIST_IP4_DNS_ALL     "NAME,DNS"
-#define NMC_FIELDS_DEV_LIST_IP4_DNS_COMMON  "NAME,DNS"
-
-/* Available fields for 'dev list' - IPv6 settings DNS part */
-static NmcOutputField nmc_fields_dev_list_ip6_dns[] = {
-	{"NAME",       N_("NAME"),        15, NULL, 0},  /* 0 */
-	{"DNS",        N_("DNS"),         17, NULL, 0},  /* 1 */
-	{NULL,         NULL,               0, NULL, 0}
-};
-#define NMC_FIELDS_DEV_LIST_IP6_DNS_ALL     "NAME,DNS"
-#define NMC_FIELDS_DEV_LIST_IP6_DNS_COMMON  "NAME,DNS"
 
 /* Available fields for 'dev wifi list' */
 static NmcOutputField nmc_fields_dev_wifi_list[] = {
@@ -327,6 +293,8 @@ device_type_to_string (NMDevice *device)
 	case NM_DEVICE_TYPE_WIMAX:
 		return NM_SETTING_WIMAX_SETTING_NAME;
 #endif
+	case NM_DEVICE_TYPE_INFINIBAND:
+		return NM_SETTING_INFINIBAND_SETTING_NAME;
 	default:
 		return _("Unknown");
 	}
@@ -372,46 +340,6 @@ ap_wpa_rsn_flags_to_string (NM80211ApSecurityFlags flags)
 		 g_free (flags_str[i++]);
 
 	return ret_str;
-}
-
-static gchar *
-ip4_address_as_string (guint32 ip)
-{
-	struct in_addr tmp_addr;
-	char buf[INET_ADDRSTRLEN+1];
-
-	memset (&buf, '\0', sizeof (buf));
-	tmp_addr.s_addr = ip;
-
-	if (inet_ntop (AF_INET, &tmp_addr, buf, INET_ADDRSTRLEN)) {
-		return g_strdup (buf);
-	} else {
-		g_warning (_("%s: error converting IP4 address 0x%X"),
-		            __func__, ntohl (tmp_addr.s_addr));
-		return NULL;
-	}
-}
-
-static gchar *
-ip6_address_as_string (const struct in6_addr *ip)
-{
-	char buf[INET6_ADDRSTRLEN];
-
-	memset (&buf, '\0', sizeof (buf));
-
-	if (inet_ntop (AF_INET6, ip, buf, INET6_ADDRSTRLEN)) {
-		return g_strdup (buf);
-	} else {
-		int j;
-		GString *ip6_str = g_string_new (NULL);
-		g_string_append_printf (ip6_str, "%02X", ip->s6_addr[0]);
-		for (j = 1; j < 16; j++)
-			g_string_append_printf (ip6_str, " %02X", ip->s6_addr[j]);
-		g_warning ("%s: error converting IP6 address %s",
-		           __func__, ip6_str->str);
-		g_string_free (ip6_str, TRUE);
-		return NULL;
-	}
 }
 
 typedef struct {
@@ -572,13 +500,12 @@ show_device_info (gpointer data, gpointer user_data)
 	NmCli *nmc = (NmCli *) user_data;
 	GError *error = NULL;
 	APInfo *info;
-	char *tmp;
 	const char *hwaddr = NULL;
 	NMDeviceState state = NM_DEVICE_STATE_UNKNOWN;
 	NMDeviceCapabilities caps;
+	NMActiveConnection *acon;
 	guint32 speed;
 	char *speed_str = NULL;
-	const GArray *array;
 	GArray *sections_array;
 	int k;
 	char *fields_str;
@@ -640,13 +567,23 @@ show_device_info (gpointer data, gpointer user_data)
 			else if (NM_IS_DEVICE_WIMAX (device))
 				hwaddr = nm_device_wimax_get_hw_address (NM_DEVICE_WIMAX (device));
 #endif
+			else if (NM_IS_DEVICE_INFINIBAND (device))
+				hwaddr = nm_device_infiniband_get_hw_address (NM_DEVICE_INFINIBAND (device));
 
 			nmc->allowed_fields[0].value = nmc_fields_dev_list_sections[0].name;  /* "GENERAL"*/
 			nmc->allowed_fields[1].value = nm_device_get_iface (device);
 			nmc->allowed_fields[2].value = device_type_to_string (device);
-			nmc->allowed_fields[3].value = nm_device_get_driver (device) ? nm_device_get_driver (device) : _("(unknown)");
-			nmc->allowed_fields[4].value = hwaddr ? hwaddr : _("unknown)");
-			nmc->allowed_fields[5].value = device_state_to_string (state);
+			nmc->allowed_fields[3].value = nm_device_get_vendor (device);
+			nmc->allowed_fields[4].value = nm_device_get_product (device);
+			nmc->allowed_fields[5].value = nm_device_get_driver (device) ? nm_device_get_driver (device) : _("(unknown)");
+			nmc->allowed_fields[6].value = hwaddr ? hwaddr : _("(unknown)");
+			nmc->allowed_fields[7].value = device_state_to_string (state);
+			nmc->allowed_fields[8].value = nm_device_get_udi (device);
+			nmc->allowed_fields[9].value = nm_device_get_ip_iface (device);
+			nmc->allowed_fields[10].value = nm_device_get_managed (device) ? _("yes") : _("no");
+			nmc->allowed_fields[11].value = nm_device_get_firmware_missing (device) ? _("yes") : _("no");
+			nmc->allowed_fields[12].value = (acon = nm_device_get_active_connection (device)) ?
+			                                   nm_object_get_path (NM_OBJECT (acon)) : _("not connected");
 
 			nmc->print_fields.flags = multiline_flag | mode_flag | escape_flag | NMC_PF_FLAG_SECTION_PREFIX;
 			print_fields (nmc->print_fields, nmc->allowed_fields); /* Print values */
@@ -823,124 +760,28 @@ show_device_info (gpointer data, gpointer user_data)
 		}
 #endif
 
-		/* IP Setup info */
+		/* IP configuration info */
 		if (state == NM_DEVICE_STATE_ACTIVATED) {
 			NMIP4Config *cfg4 = nm_device_get_ip4_config (device);
 			NMIP6Config *cfg6 = nm_device_get_ip6_config (device);
-			GSList *iter;
+			NMDHCP4Config *dhcp4 = nm_device_get_dhcp4_config (device);
+			NMDHCP6Config *dhcp6 = nm_device_get_dhcp6_config (device);
 
-			/* IP4-SETTINGS */
-			if (cfg4 && !strcasecmp (nmc_fields_dev_list_sections[section_idx].name, nmc_fields_dev_list_sections[7].name)) {
-				nmc->allowed_fields = nmc_fields_dev_list_ip4_settings;
-				nmc->print_fields.flags = multiline_flag | mode_flag | escape_flag | NMC_PF_FLAG_FIELD_NAMES;
-				nmc->print_fields.indices = parse_output_fields (NMC_FIELDS_DEV_LIST_IP4_SETTINGS_ALL, nmc->allowed_fields, NULL);
-				print_fields (nmc->print_fields, nmc->allowed_fields); /* Print header */
+			/* IP4 */
+			if (cfg4 && !strcasecmp (nmc_fields_dev_list_sections[section_idx].name, nmc_fields_dev_list_sections[7].name))
+				was_output = print_ip4_config (cfg4, nmc, nmc_fields_dev_list_sections[7].name);
 
-				for (iter = (GSList *) nm_ip4_config_get_addresses (cfg4); iter; iter = g_slist_next (iter)) {
-					NMIP4Address *addr = (NMIP4Address *) iter->data;
-					guint32 prefix = nm_ip4_address_get_prefix (addr);
-					char *tmp2;
-					char *addr_str, *prefix_str, *gateway_str;
+			/* DHCP4 */
+			if (dhcp4 && !strcasecmp (nmc_fields_dev_list_sections[section_idx].name, nmc_fields_dev_list_sections[8].name))
+				was_output = print_dhcp4_config (dhcp4, nmc, nmc_fields_dev_list_sections[8].name);
 
-					addr_str = ip4_address_as_string (nm_ip4_address_get_address (addr));
+			/* IP6 */
+			if (cfg6 && !strcasecmp (nmc_fields_dev_list_sections[section_idx].name, nmc_fields_dev_list_sections[9].name))
+				was_output = print_ip6_config (cfg6, nmc, nmc_fields_dev_list_sections[9].name);
 
-					tmp2 = ip4_address_as_string (nm_utils_ip4_prefix_to_netmask (prefix));
-					prefix_str = g_strdup_printf ("%d (%s)", prefix, tmp2);
-					g_free (tmp2);
-
-					gateway_str = ip4_address_as_string (nm_ip4_address_get_gateway (addr));
-
-					nmc->allowed_fields[0].value = nmc_fields_dev_list_sections[7].name;  /* "IP4-SETTINGS" */
-					nmc->allowed_fields[1].value = addr_str;
-					nmc->allowed_fields[2].value = prefix_str;
-					nmc->allowed_fields[3].value = gateway_str;
-
-					nmc->print_fields.flags = multiline_flag | mode_flag | escape_flag | NMC_PF_FLAG_SECTION_PREFIX;
-					print_fields (nmc->print_fields, nmc->allowed_fields); /* Print values */
-					g_free (addr_str);
-					g_free (prefix_str);
-					g_free (gateway_str);
-				}
-				was_output = TRUE;
-			}
-			/* IP4-DNS */
-			if (cfg4 && !strcasecmp (nmc_fields_dev_list_sections[section_idx].name, nmc_fields_dev_list_sections[8].name)) {
-				array = nm_ip4_config_get_nameservers (cfg4);
-				if (array) {
-					int i;
-
-					nmc->allowed_fields = nmc_fields_dev_list_ip4_dns;
-					nmc->print_fields.flags = multiline_flag | mode_flag | escape_flag | NMC_PF_FLAG_FIELD_NAMES;
-					nmc->print_fields.indices = parse_output_fields (NMC_FIELDS_DEV_LIST_IP4_DNS_ALL, nmc->allowed_fields, NULL);
-					print_fields (nmc->print_fields, nmc->allowed_fields); /* Print header */
-
-					for (i = 0; i < array->len; i++) {
-						char *dns_name = g_strdup_printf ("%s%d", nmc_fields_dev_list_sections[8].name, i+1);
-						tmp = ip4_address_as_string (g_array_index (array, guint32, i));
-						nmc->allowed_fields[0].value = dns_name;  /* "IP4-DNS<num>" */
-						nmc->allowed_fields[1].value = tmp;
-
-						nmc->print_fields.flags = multiline_flag | mode_flag | escape_flag | NMC_PF_FLAG_SECTION_PREFIX;
-						print_fields (nmc->print_fields, nmc->allowed_fields); /* Print values */
-						g_free (tmp);
-						g_free (dns_name);
-					}
-				}
-				was_output = TRUE;
-			}
-
-			/* IP6-SETTINGS */
-			if (cfg6 && !strcasecmp (nmc_fields_dev_list_sections[section_idx].name, nmc_fields_dev_list_sections[9].name)) {
-				nmc->allowed_fields = nmc_fields_dev_list_ip6_settings;
-				nmc->print_fields.flags = multiline_flag | mode_flag | escape_flag | NMC_PF_FLAG_FIELD_NAMES;
-				nmc->print_fields.indices = parse_output_fields (NMC_FIELDS_DEV_LIST_IP6_SETTINGS_ALL, nmc->allowed_fields, NULL);
-				print_fields (nmc->print_fields, nmc->allowed_fields); /* Print header */
-
-				for (iter = (GSList *) nm_ip6_config_get_addresses (cfg6); iter; iter = g_slist_next (iter)) {
-					NMIP6Address *addr = (NMIP6Address *) iter->data;
-					guint32 prefix = nm_ip6_address_get_prefix (addr);
-					char *addr_str, *prefix_str, *gateway_str;
-
-					addr_str = ip6_address_as_string (nm_ip6_address_get_address (addr));
-
-					prefix_str = g_strdup_printf ("%d", prefix);
-					gateway_str = ip6_address_as_string (nm_ip6_address_get_gateway (addr));
-
-					nmc->allowed_fields[0].value = nmc_fields_dev_list_sections[9].name;  /* "IP6-SETTINGS" */
-					nmc->allowed_fields[1].value = addr_str;
-					nmc->allowed_fields[2].value = prefix_str;
-					nmc->allowed_fields[3].value = gateway_str;
-
-					nmc->print_fields.flags = multiline_flag | mode_flag | escape_flag | NMC_PF_FLAG_SECTION_PREFIX;
-					print_fields (nmc->print_fields, nmc->allowed_fields); /* Print values */
-					g_free (addr_str);
-					g_free (prefix_str);
-					g_free (gateway_str);
-				}
-				was_output = TRUE;
-			}
-			/* IP6-DNS */
-			if (cfg6 && !strcasecmp (nmc_fields_dev_list_sections[section_idx].name, nmc_fields_dev_list_sections[10].name)) {
-				int i = 1;
-				nmc->allowed_fields = nmc_fields_dev_list_ip6_dns;
-				nmc->print_fields.flags = multiline_flag | mode_flag | escape_flag | NMC_PF_FLAG_FIELD_NAMES;
-				nmc->print_fields.indices = parse_output_fields (NMC_FIELDS_DEV_LIST_IP6_DNS_ALL, nmc->allowed_fields, NULL);
-				print_fields (nmc->print_fields, nmc->allowed_fields); /* Print header */
-
-				for (iter = (GSList *) nm_ip6_config_get_nameservers (cfg6); iter; iter = g_slist_next (iter)) {
-					char *dns_name = g_strdup_printf ("%s%d", nmc_fields_dev_list_sections[10].name, i++);
-
-					tmp = ip6_address_as_string (iter->data);
-					nmc->allowed_fields[0].value = dns_name;  /* "IP6-DNS<num>" */
-					nmc->allowed_fields[1].value = tmp;
-
-					nmc->print_fields.flags = multiline_flag | mode_flag | escape_flag | NMC_PF_FLAG_SECTION_PREFIX;
-					print_fields (nmc->print_fields, nmc->allowed_fields); /* Print values */
-					g_free (tmp);
-					g_free (dns_name);
-				}
-				was_output = TRUE;
-			}
+			/* DHCP6 */
+			if (dhcp6 && !strcasecmp (nmc_fields_dev_list_sections[section_idx].name, nmc_fields_dev_list_sections[10].name))
+				was_output = print_dhcp6_config (dhcp6, nmc, nmc_fields_dev_list_sections[10].name);
 		}
 	}
 

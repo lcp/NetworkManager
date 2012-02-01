@@ -23,7 +23,6 @@
 
 #include <dlfcn.h>
 #include <syslog.h>
-#include <execinfo.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -47,7 +46,7 @@ static guint32 log_domains = \
 	LOGD_DHCP4 | LOGD_DHCP6 | LOGD_PPP | LOGD_IP4 | LOGD_IP6 | LOGD_AUTOIP4 | \
 	LOGD_DNS | LOGD_VPN | LOGD_SHARING | LOGD_SUPPLICANT | LOGD_AGENTS | \
 	LOGD_SETTINGS | LOGD_SUSPEND | LOGD_CORE | LOGD_DEVICE | LOGD_OLPC_MESH | \
-	LOGD_WIMAX;
+	LOGD_WIMAX | LOGD_INFINIBAND | LOGD_FIREWALL;
 
 typedef struct {
 	guint32 num;
@@ -88,6 +87,8 @@ static const LogDesc domain_descs[] = {
 	{ LOGD_DEVICE,    "DEVICE" },
 	{ LOGD_OLPC_MESH, "OLPC" },
 	{ LOGD_WIMAX,     "WIMAX" },
+	{ LOGD_INFINIBAND,"INFINIBAND" },
+	{ LOGD_FIREWALL,  "FIREWALL" },
 	{ 0, NULL }
 };
 

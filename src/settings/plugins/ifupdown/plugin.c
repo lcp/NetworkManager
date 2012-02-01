@@ -19,7 +19,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  *
  * (C) Copyright 2007,2008 Canonical Ltd.
- * (C) Copyright 2009 Red Hat, Inc.
+ * (C) Copyright 2009 - 2011 Red Hat, Inc.
  */
 
 #include <string.h>
@@ -42,6 +42,7 @@
 #include "nm-setting-wireless.h"
 #include "nm-setting-wired.h"
 #include "nm-setting-ppp.h"
+#include "nm-utils.h"
 
 #include "nm-ifupdown-connection.h"
 #include "plugin.h"
@@ -59,9 +60,6 @@
 #define IFUPDOWN_PLUGIN_NAME "ifupdown"
 #define IFUPDOWN_PLUGIN_INFO "(C) 2008 Canonical Ltd.  To report bugs please use the NetworkManager mailing list."
 #define IFUPDOWN_SYSTEM_HOSTNAME_FILE "/etc/hostname"
-
-#define IFUPDOWN_SYSTEM_SETTINGS_KEY_FILE SYSCONFDIR "/NetworkManager/NetworkManager.conf"
-#define IFUPDOWN_OLD_SYSTEM_SETTINGS_KEY_FILE SYSCONFDIR "/NetworkManager/nm-system-settings.conf"
 
 #define IFUPDOWN_KEY_FILE_GROUP "ifupdown"
 #define IFUPDOWN_KEY_FILE_KEY_MANAGED "managed"
@@ -81,7 +79,7 @@ typedef struct {
 	GHashTable *well_known_interfaces;
 	GHashTable *well_known_ifaces;
 	gboolean unmanage_well_known;
-	const char *conf_file;
+	char *conf_file;
 
 	gulong inotify_event_id;
 	int inotify_system_hostname_wd;
@@ -190,10 +188,9 @@ bind_device_to_connection (SCPluginIfupdown *self,
                            NMIfupdownConnection *exported)
 {
 	GByteArray *mac_address;
-	NMSetting *s_wired = NULL;
-	NMSetting *s_wifi = NULL;
+	NMSettingWired *s_wired;
+	NMSettingWireless *s_wifi;
 	const char *iface, *address;
-	struct ether_addr *tmp_mac;
 
 	iface = g_udev_device_get_name (device);
 	if (!iface) {
@@ -207,18 +204,15 @@ bind_device_to_connection (SCPluginIfupdown *self,
 		return;
 	}
 
-	tmp_mac = ether_aton (address);
-	if (!tmp_mac) {
+	mac_address = nm_utils_hwaddr_atoba (address, ARPHRD_ETHER);
+	if (!mac_address) {
 		PLUGIN_WARN ("SCPluginIfupdown", "failed to parse MAC address '%s' for %s",
 		             address, iface);
 		return;
 	}
 
-	mac_address = g_byte_array_sized_new (ETH_ALEN);
-	g_byte_array_append (mac_address, &(tmp_mac->ether_addr_octet[0]), ETH_ALEN);
-
-	s_wired = nm_connection_get_setting (NM_CONNECTION (exported), NM_TYPE_SETTING_WIRED);
-	s_wifi = nm_connection_get_setting (NM_CONNECTION (exported), NM_TYPE_SETTING_WIRELESS);
+	s_wired = nm_connection_get_setting_wired (NM_CONNECTION (exported));
+	s_wifi = nm_connection_get_setting_wireless (NM_CONNECTION (exported));
 	if (s_wired) {
 		PLUGIN_PRINT ("SCPluginIfupdown", "locking wired connection setting");
 		g_object_set (s_wired, NM_SETTING_WIRED_MAC_ADDRESS, mac_address, NULL);
@@ -432,13 +426,13 @@ SCPluginIfupdown_init (NMSystemConfigInterface *config)
 	keys = g_hash_table_get_keys (priv->iface_connections);
 	for (iter = keys; iter; iter = g_list_next (iter)) {
 		NMIfupdownConnection *exported;
-		NMSetting *setting;
+		NMSettingConnection *setting;
 
 		if (!g_hash_table_lookup (auto_ifaces, iter->data))
 			continue;
 
 		exported = g_hash_table_lookup (priv->iface_connections, iter->data);
-		setting = NM_SETTING (nm_connection_get_setting (NM_CONNECTION (exported), NM_TYPE_SETTING_CONNECTION));
+		setting = nm_connection_get_setting_connection (NM_CONNECTION (exported));
 		g_object_set (setting, NM_SETTING_CONNECTION_AUTOCONNECT, TRUE, NULL);
 
 		nm_settings_connection_commit_changes (NM_SETTINGS_CONNECTION (exported), ignore_cb, NULL);
@@ -448,12 +442,7 @@ SCPluginIfupdown_init (NMSystemConfigInterface *config)
 	g_list_free (keys);
 	g_hash_table_destroy (auto_ifaces);
 
-	/* Find the config file */
-	if (g_file_test (IFUPDOWN_SYSTEM_SETTINGS_KEY_FILE, G_FILE_TEST_EXISTS))
-		priv->conf_file = IFUPDOWN_SYSTEM_SETTINGS_KEY_FILE;
-	else
-		priv->conf_file = IFUPDOWN_OLD_SYSTEM_SETTINGS_KEY_FILE;
-
+	/* Read the config file to find out whether to manage interfaces */
 	keyfile = g_key_file_new ();
 	if (!g_key_file_load_from_file (keyfile,
 	                                priv->conf_file,
@@ -706,20 +695,28 @@ GObject__dispose (GObject *object)
 	if (priv->well_known_interfaces)
 		g_hash_table_destroy(priv->well_known_interfaces);
 
+	g_free (priv->conf_file);
+
 	if (priv->client)
 		g_object_unref (priv->client);
+
 
 	G_OBJECT_CLASS (sc_plugin_ifupdown_parent_class)->dispose (object);
 }
 
 G_MODULE_EXPORT GObject *
-nm_system_config_factory (void)
+nm_system_config_factory (const char *config_file)
 {
 	static SCPluginIfupdown *singleton = NULL;
+	SCPluginIfupdownPrivate *priv;
 
-	if (!singleton)
+	if (!singleton) {
 		singleton = SC_PLUGIN_IFUPDOWN (g_object_new (SC_TYPE_PLUGIN_IFUPDOWN, NULL));
-	else
+		if (singleton) {
+			priv = SC_PLUGIN_IFUPDOWN_GET_PRIVATE (singleton);
+			priv->conf_file = strdup (config_file);
+		}
+	} else
 		g_object_ref (singleton);
 
 	return G_OBJECT (singleton);

@@ -34,8 +34,10 @@
 #include <nm-setting-wireless.h>
 #include <nm-setting-bluetooth.h>
 #include <nm-setting-8021x.h>
+#include <nm-utils.h>
 #include <arpa/inet.h>
 #include <netinet/ether.h>
+#include <linux/if_infiniband.h>
 #include <string.h>
 #include <ctype.h>
 
@@ -650,12 +652,11 @@ static void
 mac_address_parser (NMSetting *setting, const char *key, GKeyFile *keyfile, const char *keyfile_path)
 {
 	const char *setting_name = nm_setting_get_name (setting);
-	struct ether_addr *eth;
 	char *tmp_string = NULL, *p;
 	gint *tmp_list;
 	GByteArray *array = NULL;
 	gsize length;
-	int i;
+	int i, type;
 
 	p = tmp_string = g_key_file_get_string (keyfile, setting_name, key, NULL);
 	if (tmp_string) {
@@ -666,43 +667,45 @@ mac_address_parser (NMSetting *setting, const char *key, GKeyFile *keyfile, cons
 				i++;
 			p++;
 		}
-		if (i == 5) {
-			/* parse as a MAC address */
-			eth = ether_aton (tmp_string);
-			if (eth) {
-				g_free (tmp_string);
-				array = g_byte_array_sized_new (ETH_ALEN);
-				g_byte_array_append (array, eth->ether_addr_octet, ETH_ALEN);
-				goto done;
-			}
-		}
+
+		/* If we found enough it's probably a string-format MAC address */
+		type = nm_utils_hwaddr_type (i + 1);
+		if (type > 0)
+			array = nm_utils_hwaddr_atoba (tmp_string, type);
 	}
 	g_free (tmp_string);
 
-	/* Old format; list of ints */
-	tmp_list = g_key_file_get_integer_list (keyfile, setting_name, key, &length, NULL);
-	array = g_byte_array_sized_new (length);
-	for (i = 0; i < length; i++) {
-		int val = tmp_list[i];
-		unsigned char v = (unsigned char) (val & 0xFF);
+	if (array == NULL) {
+		/* Old format; list of ints */
+		tmp_list = g_key_file_get_integer_list (keyfile, setting_name, key, &length, NULL);
+		type = nm_utils_hwaddr_type (length);
+		if (type < 0) {
+			array = g_byte_array_sized_new (length);
+			for (i = 0; i < length; i++) {
+				int val = tmp_list[i];
+				const guint8 v = (guint8) (val & 0xFF);
 
-		if (val < 0 || val > 255) {
-			g_warning ("%s: %s / %s ignoring invalid byte element '%d' (not "
-			           " between 0 and 255 inclusive)", __func__, setting_name,
-			           key, val);
-		} else
-			g_byte_array_append (array, (const unsigned char *) &v, sizeof (v));
+				if (val < 0 || val > 255) {
+					g_warning ("%s: %s / %s ignoring invalid byte element '%d' (not "
+							   " between 0 and 255 inclusive)", __func__, setting_name,
+							   key, val);
+					g_byte_array_free (array, TRUE);
+					array = NULL;
+					break;
+				}
+				g_byte_array_append (array, &v, 1);
+			}
+		}
+		g_free (tmp_list);
 	}
-	g_free (tmp_list);
 
-done:
-	if (array->len == ETH_ALEN) {
+	if (array) {
 		g_object_set (setting, key, array, NULL);
+		g_byte_array_free (array, TRUE);
 	} else {
 		g_warning ("%s: ignoring invalid MAC address for %s / %s",
 		           __func__, setting_name, key);
 	}
-	g_byte_array_free (array, TRUE);
 }
 
 static void
@@ -821,6 +824,22 @@ ssid_parser (NMSetting *setting, const char *key, GKeyFile *keyfile, const char 
 		g_byte_array_free (array, TRUE);
 	} else {
 		g_warning ("%s: ignoring invalid SSID for %s / %s",
+		           __func__, setting_name, key);
+	}
+}
+
+static void
+password_raw_parser (NMSetting *setting, const char *key, GKeyFile *keyfile, const char *keyfile_path)
+{
+	const char *setting_name = nm_setting_get_name (setting);
+	GByteArray *array;
+
+	array = get_uchar_array (keyfile, setting_name, key, FALSE, TRUE);
+	if (array) {
+		g_object_set (setting, key, array, NULL);
+		g_byte_array_free (array, TRUE);
+	} else {
+		g_warning ("%s: ignoring invalid raw password for %s / %s",
 		           __func__, setting_name, key);
 	}
 }
@@ -1026,10 +1045,18 @@ static KeyParser key_parsers[] = {
 	  NM_SETTING_BLUETOOTH_BDADDR,
 	  TRUE,
 	  mac_address_parser },
+	{ NM_SETTING_INFINIBAND_SETTING_NAME,
+	  NM_SETTING_INFINIBAND_MAC_ADDRESS,
+	  TRUE,
+	  mac_address_parser },
 	{ NM_SETTING_WIRELESS_SETTING_NAME,
 	  NM_SETTING_WIRELESS_SSID,
 	  TRUE,
 	  ssid_parser },
+	{ NM_SETTING_802_1X_SETTING_NAME,
+	  NM_SETTING_802_1X_PASSWORD_RAW,
+	  TRUE,
+	  password_raw_parser },
 	{ NM_SETTING_802_1X_SETTING_NAME,
 	  NM_SETTING_802_1X_CA_CERT,
 	  TRUE,
@@ -1307,7 +1334,7 @@ nm_keyfile_plugin_connection_from_file (const char *filename, GError **error)
 	 * the keyfile didn't include it, which can happen when the base
 	 * device type setting is all default values (like ethernet).
 	 */
-	s_con = (NMSettingConnection *) nm_connection_get_setting (connection, NM_TYPE_SETTING_CONNECTION);
+	s_con = nm_connection_get_setting_connection (connection);
 	if (s_con) {
 		ctype = nm_setting_connection_get_connection_type (s_con);
 		setting = nm_connection_get_setting_by_name (connection, ctype);
@@ -1321,7 +1348,7 @@ nm_keyfile_plugin_connection_from_file (const char *filename, GError **error)
 	if (vpn_secrets) {
 		NMSettingVPN *s_vpn;
 
-		s_vpn = (NMSettingVPN *) nm_connection_get_setting (connection, NM_TYPE_SETTING_VPN);
+		s_vpn = nm_connection_get_setting_vpn (connection);
 		if (s_vpn)
 			read_vpn_secrets (key_file, s_vpn);
 	}

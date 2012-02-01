@@ -32,14 +32,17 @@
 
 #include <nm-setting-8021x.h>
 #include <nm-setting-bluetooth.h>
+#include <nm-setting-bond.h>
 #include <nm-setting-cdma.h>
 #include <nm-setting-connection.h>
 #include <nm-setting-gsm.h>
+#include <nm-setting-infiniband.h>
 #include <nm-setting-ip4-config.h>
 #include <nm-setting-ip6-config.h>
 #include <nm-setting-olpc-mesh.h>
 #include <nm-setting-ppp.h>
 #include <nm-setting-pppoe.h>
+#include <nm-setting-serial.h>
 #include <nm-setting-vpn.h>
 #include <nm-setting-wimax.h>
 #include <nm-setting-wired.h>
@@ -161,6 +164,8 @@ void          nm_connection_set_path      (NMConnection *connection,
 
 const char *  nm_connection_get_path      (NMConnection *connection);
 
+const char *  nm_connection_get_virtual_iface_name (NMConnection *connection);
+
 gboolean      nm_connection_is_type (NMConnection *connection, const char *type);
 
 void          nm_connection_for_each_setting_value (NMConnection *connection,
@@ -183,14 +188,17 @@ const char *  nm_connection_get_id        (NMConnection *connection);
 
 NMSetting8021x *           nm_connection_get_setting_802_1x            (NMConnection *connection);
 NMSettingBluetooth *       nm_connection_get_setting_bluetooth         (NMConnection *connection);
+NMSettingBond *            nm_connection_get_setting_bond              (NMConnection *connection);
 NMSettingCdma *            nm_connection_get_setting_cdma              (NMConnection *connection);
 NMSettingConnection *      nm_connection_get_setting_connection        (NMConnection *connection);
 NMSettingGsm *             nm_connection_get_setting_gsm               (NMConnection *connection);
+NMSettingInfiniband *      nm_connection_get_setting_infiniband        (NMConnection *connection);
 NMSettingIP4Config *       nm_connection_get_setting_ip4_config        (NMConnection *connection);
 NMSettingIP6Config *       nm_connection_get_setting_ip6_config        (NMConnection *connection);
 NMSettingOlpcMesh *        nm_connection_get_setting_olpc_mesh         (NMConnection *connection);
 NMSettingPPP *             nm_connection_get_setting_ppp               (NMConnection *connection);
 NMSettingPPPOE *           nm_connection_get_setting_pppoe             (NMConnection *connection);
+NMSettingSerial *          nm_connection_get_setting_serial            (NMConnection *connection);
 NMSettingVPN *             nm_connection_get_setting_vpn               (NMConnection *connection);
 NMSettingWimax *           nm_connection_get_setting_wimax             (NMConnection *connection);
 NMSettingWired *           nm_connection_get_setting_wired             (NMConnection *connection);

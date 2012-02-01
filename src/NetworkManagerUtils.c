@@ -32,8 +32,6 @@
 #include "nm-utils.h"
 #include "nm-logging.h"
 #include "nm-device.h"
-#include "nm-device-wifi.h"
-#include "nm-device-ethernet.h"
 #include "nm-dbus-manager.h"
 #include "nm-dispatcher-action.h"
 #include "nm-dbus-glib-types.h"
@@ -157,18 +155,6 @@ nm_utils_ip4_prefix_to_netmask (guint32 prefix)
 	}
 
 	return (guint32) htonl (netmask);
-}
-
-char *
-nm_ether_ntop (const struct ether_addr *mac)
-{
-	/* we like leading zeros and all-caps, instead
-	 * of what glibc's ether_ntop() gives us
-	 */
-	return g_strdup_printf ("%02X:%02X:%02X:%02X:%02X:%02X",
-	                        mac->ether_addr_octet[0], mac->ether_addr_octet[1],
-	                        mac->ether_addr_octet[2], mac->ether_addr_octet[3],
-	                        mac->ether_addr_octet[4], mac->ether_addr_octet[5]);
 }
 
 void
@@ -955,7 +941,7 @@ nm_utils_complete_generic (NMConnection *connection,
 	const char *method;
 	char *id, *uuid;
 
-	s_con = (NMSettingConnection *) nm_connection_get_setting (connection, NM_TYPE_SETTING_CONNECTION);
+	s_con = nm_connection_get_setting_connection (connection);
 	if (!s_con) {
 		s_con = (NMSettingConnection *) nm_setting_connection_new ();
 		nm_connection_add_setting (connection, NM_SETTING (s_con));
@@ -976,7 +962,7 @@ nm_utils_complete_generic (NMConnection *connection,
 	}
 
 	/* Add an 'auto' IPv4 connection if present */
-	s_ip4 = (NMSettingIP4Config *) nm_connection_get_setting (connection, NM_TYPE_SETTING_IP4_CONFIG);
+	s_ip4 = nm_connection_get_setting_ip4_config (connection);
 	if (!s_ip4) {
 		s_ip4 = (NMSettingIP4Config *) nm_setting_ip4_config_new ();
 		nm_connection_add_setting (connection, NM_SETTING (s_ip4));
@@ -989,7 +975,7 @@ nm_utils_complete_generic (NMConnection *connection,
 	}
 
 	/* Add an 'auto' IPv6 setting if allowed and not preset */
-	s_ip6 = (NMSettingIP6Config *) nm_connection_get_setting (connection, NM_TYPE_SETTING_IP6_CONFIG);
+	s_ip6 = nm_connection_get_setting_ip6_config (connection);
 	if (!s_ip6 && default_enable_ipv6) {
 		s_ip6 = (NMSettingIP6Config *) nm_setting_ip6_config_new ();
 		nm_connection_add_setting (connection, NM_SETTING (s_ip6));

@@ -38,14 +38,10 @@
 #include "nm-vpn-manager.h"
 #include "nm-modem-manager.h"
 #include "nm-device-bt.h"
-#include "nm-device-interface.h"
-#include "nm-device-private.h"
+#include "nm-device.h"
 #include "nm-device-ethernet.h"
 #include "nm-device-wifi.h"
 #include "nm-device-olpc-mesh.h"
-#if WITH_WIMAX
-#include "nm-device-wimax.h"
-#endif
 #include "nm-device-modem.h"
 #include "nm-system.h"
 #include "nm-properties-changed-signal.h"
@@ -366,6 +362,24 @@ nm_manager_get_device_by_path (NMManager *manager, const char *path)
 	return NULL;
 }
 
+NMDevice *
+nm_manager_get_device_by_master (NMManager *manager, const char *master, const char *driver)
+{
+	GSList *iter;
+
+	g_return_val_if_fail (master != NULL, NULL);
+
+	for (iter = NM_MANAGER_GET_PRIVATE (manager)->devices; iter; iter = iter->next) {
+		NMDevice *device = NM_DEVICE (iter->data);
+
+		if (!strcmp (nm_device_get_iface (device), master) &&
+		    (!driver || !strcmp (nm_device_get_driver (device), driver)))
+			return device;
+	}
+
+	return NULL;
+}
+
 static gboolean
 manager_sleeping (NMManager *self)
 {
@@ -422,7 +436,7 @@ modem_added (NMModemManager *modem_manager,
 
 	/* Give Bluetooth DUN devices first chance to claim the modem */
 	for (iter = priv->devices; iter; iter = g_slist_next (iter)) {
-		if (NM_IS_DEVICE_BT (iter->data)) {
+		if (nm_device_get_device_type (iter->data) == NM_DEVICE_TYPE_BT) {
 			if (nm_device_bt_modem_added (NM_DEVICE_BT (iter->data), modem, driver))
 				return;
 		}
@@ -535,7 +549,7 @@ remove_one_device (NMManager *manager,
 		 * connections get torn down and the interface is deactivated.
 		 */
 
-		if (   !nm_device_interface_can_assume_connections (NM_DEVICE_INTERFACE (device))
+		if (   !nm_device_can_assume_connections (device)
 		    || (nm_device_get_state (device) != NM_DEVICE_STATE_ACTIVATED)
 		    || !quitting)
 			nm_device_set_managed (device, FALSE, NM_DEVICE_STATE_REASON_REMOVED);
@@ -562,7 +576,7 @@ modem_removed (NMModemManager *modem_manager,
 
 	/* Give Bluetooth DUN devices first chance to handle the modem removal */
 	for (iter = priv->devices; iter; iter = g_slist_next (iter)) {
-		if (NM_IS_DEVICE_BT (iter->data)) {
+		if (nm_device_get_device_type (iter->data) == NM_DEVICE_TYPE_BT) {
 			if (nm_device_bt_modem_removed (NM_DEVICE_BT (iter->data), modem))
 				return;
 		}
@@ -639,11 +653,11 @@ might_be_vpn (NMConnection *connection)
 	NMSettingConnection *s_con;
 	const char *ctype = NULL;
 
-	if (nm_connection_get_setting (connection, NM_TYPE_SETTING_VPN))
+	if (nm_connection_get_setting_vpn (connection))
 		return TRUE;
 
 	/* Make sure it's not a VPN, which we can't autocomplete yet */
-	s_con = (NMSettingConnection *) nm_connection_get_setting (connection, NM_TYPE_SETTING_CONNECTION);
+	s_con = nm_connection_get_setting_connection (connection);
 	if (s_con)
 		ctype = nm_setting_connection_get_connection_type (s_con);
 
@@ -655,7 +669,7 @@ try_complete_vpn (NMConnection *connection, GSList *existing, GError **error)
 {
 	g_assert (might_be_vpn (connection) == TRUE);
 
-	if (!nm_connection_get_setting (connection, NM_TYPE_SETTING_VPN)) {
+	if (!nm_connection_get_setting_vpn (connection)) {
 		g_set_error_literal (error,
 			                 NM_MANAGER_ERROR,
 			                 NM_MANAGER_ERROR_UNSUPPORTED_CONNECTION_TYPE,
@@ -924,12 +938,80 @@ get_active_connections (NMManager *manager, NMConnection *filter)
 /* Settings stuff via NMSettings                                   */
 /*******************************************************************/
 
+static gboolean
+connection_needs_virtual_device (NMConnection *connection)
+{
+	if (nm_connection_is_type (connection, NM_SETTING_BOND_SETTING_NAME))
+		return TRUE;
+
+	return FALSE;
+}
+
+static gboolean
+system_update_virtual_device (NMConnection *connection)
+{
+	if (nm_connection_is_type (connection, NM_SETTING_BOND_SETTING_NAME)) {
+		NMSettingBond *s_bond;
+
+		s_bond = nm_connection_get_setting_bond (connection);
+		g_assert (s_bond);
+
+		return nm_system_add_bonding_master (s_bond);
+	}
+
+	return TRUE;
+}
+
 static void
-connections_changed (NMSettings *settings,
+system_create_virtual_devices (NMSettings *settings)
+{
+	GSList *iter, *connections;
+
+	nm_log_info (LOGD_CORE, "Creating virtual devices");
+
+	connections = nm_settings_get_connections (settings);
+	for (iter = connections; iter; iter = g_slist_next (iter)) {
+		NMConnection *connection = NM_CONNECTION (iter->data);
+
+		if (connection_needs_virtual_device (connection))
+			system_update_virtual_device (connection);
+	}
+
+	g_slist_free (connections);
+}
+
+static void
+connection_added (NMSettings *settings,
+                  NMSettingsConnection *connection,
+                  NMManager *manager)
+{
+	bluez_manager_resync_devices (manager);
+
+	if (connection_needs_virtual_device (NM_CONNECTION (connection)))
+		system_update_virtual_device (NM_CONNECTION (connection));
+}
+
+static void
+connection_changed (NMSettings *settings,
                      NMSettingsConnection *connection,
                      NMManager *manager)
 {
 	bluez_manager_resync_devices (manager);
+
+	/* FIXME: Some virtual devices may need to be updated in the future. */
+}
+
+static void
+connection_removed (NMSettings *settings,
+                    NMSettingsConnection *connection,
+                    NMManager *manager)
+{
+	bluez_manager_resync_devices (manager);
+
+	/*
+	 * Do not delete existing virtual devices to keep connectivity up.
+	 * Virtual devices are reused when NetworkManager is restarted.
+	 */
 }
 
 static void
@@ -946,7 +1028,7 @@ system_unmanaged_devices_changed_cb (NMSettings *settings,
 		NMDevice *device = NM_DEVICE (iter->data);
 		gboolean managed;
 
-		managed = !nm_device_interface_spec_match_list (NM_DEVICE_INTERFACE (device), unmanaged_specs);
+		managed = !nm_device_spec_match_list (device, unmanaged_specs);
 		nm_device_set_managed (device,
 		                       managed,
 		                       managed ? NM_DEVICE_STATE_REASON_NOW_MANAGED :
@@ -1072,20 +1154,19 @@ manager_update_radio_enabled (NMManager *self,
 
 	/* enable/disable wireless devices as required */
 	for (iter = priv->devices; iter; iter = iter->next) {
-		RfKillType devtype = RFKILL_TYPE_UNKNOWN;
+		NMDevice *device = NM_DEVICE (iter->data);
 
-		g_object_get (G_OBJECT (iter->data), NM_DEVICE_INTERFACE_RFKILL_TYPE, &devtype, NULL);
-		if (devtype == rstate->rtype) {
+		if (nm_device_get_rfkill_type (device) == rstate->rtype) {
 			nm_log_dbg (LOGD_RFKILL, "(%s): setting radio %s",
-			            nm_device_get_iface (NM_DEVICE (iter->data)),
+			            nm_device_get_iface (device),
 			            enabled ? "enabled" : "disabled");
-			nm_device_interface_set_enabled (NM_DEVICE_INTERFACE (iter->data), enabled);
+			nm_device_set_enabled (device, enabled);
 		}
 	}
 }
 
 static void
-manager_hidden_ap_found (NMDeviceInterface *device,
+manager_hidden_ap_found (NMDevice *device,
                          NMAccessPoint *ap,
                          gpointer user_data)
 {
@@ -1128,7 +1209,7 @@ nm_manager_get_ipw_rfkill_state (NMManager *self)
 		NMDevice *candidate = NM_DEVICE (iter->data);
 		RfKillState candidate_state;
 
-		if (NM_IS_DEVICE_WIFI (candidate)) {
+		if (nm_device_get_device_type (candidate) == NM_DEVICE_TYPE_WIFI) {
 			candidate_state = nm_device_wifi_get_ipw_rfkill_state (NM_DEVICE_WIFI (candidate));
 
 			if (candidate_state > ipw_state)
@@ -1149,11 +1230,9 @@ nm_manager_get_modem_enabled_state (NMManager *self)
 	for (iter = priv->devices; iter; iter = g_slist_next (iter)) {
 		NMDevice *candidate = NM_DEVICE (iter->data);
 		RfKillState candidate_state = RFKILL_UNBLOCKED;
-		RfKillType devtype = RFKILL_TYPE_UNKNOWN;
 
-		g_object_get (G_OBJECT (candidate), NM_DEVICE_INTERFACE_RFKILL_TYPE, &devtype, NULL);
-		if (devtype == RFKILL_TYPE_WWAN) {
-			if (!nm_device_interface_get_enabled (NM_DEVICE_INTERFACE (candidate)))
+		if (nm_device_get_rfkill_type (candidate) == RFKILL_TYPE_WWAN) {
+			if (!nm_device_get_enabled (candidate))
 				candidate_state = RFKILL_SOFT_BLOCKED;
 
 			if (candidate_state > wwan_state)
@@ -1323,7 +1402,7 @@ disconnect_net_auth_done_cb (NMAuthChain *chain,
 	error = deactivate_disconnect_check_error (auth_error, result, "Disconnect");
 	if (!error) {
 		device = nm_auth_chain_get_data (chain, "device");
-		if (!nm_device_interface_disconnect (NM_DEVICE_INTERFACE (device), &error))
+		if (!nm_device_disconnect (device, &error))
 			g_assert (error);
 	}
 
@@ -1375,7 +1454,7 @@ manager_device_disconnect_request (NMDevice *device,
 
 	/* Yay for root */
 	if (0 == sender_uid) {
-		if (!nm_device_interface_disconnect (NM_DEVICE_INTERFACE (device), &error)) {
+		if (!nm_device_disconnect (device, &error)) {
 			dbus_g_method_return_error (context, error);
 			g_clear_error (&error);
 		} else
@@ -1403,12 +1482,23 @@ add_device (NMManager *self, NMDevice *device)
 	const GSList *unmanaged_specs;
 	NMConnection *existing = NULL;
 	gboolean managed = FALSE, enabled = FALSE;
-	RfKillType rtype = RFKILL_TYPE_UNKNOWN;
+	RfKillType rtype;
+	NMDeviceType devtype;
 
 	iface = nm_device_get_ip_iface (device);
 	g_assert (iface);
 
-	if (!NM_IS_DEVICE_MODEM (device) && find_device_by_ip_iface (self, iface)) {
+	devtype = nm_device_get_device_type (device);
+
+	/* Ignore the device if we already know about it.  But some modems will
+	 * provide pseudo-ethernet devices that NM has already claimed while
+	 * ModemManager is still detecting the modem's serial ports, so when the
+	 * MM modem object finally shows up it may have the same IP interface as the
+	 * ethernet interface we've already detected.  In this case we skip the
+	 * check for an existing device with the same IP interface name and kill
+	 * the ethernet device later in favor of the modem device.
+	 */
+	if ((devtype != NM_DEVICE_TYPE_MODEM) && find_device_by_ip_iface (self, iface)) {
 		g_object_unref (device);
 		return;
 	}
@@ -1419,11 +1509,11 @@ add_device (NMManager *self, NMDevice *device)
 					  G_CALLBACK (manager_device_state_changed),
 					  self);
 
-	g_signal_connect (device, NM_DEVICE_INTERFACE_DISCONNECT_REQUEST,
+	g_signal_connect (device, NM_DEVICE_DISCONNECT_REQUEST,
 					  G_CALLBACK (manager_device_disconnect_request),
 					  self);
 
-	if (NM_IS_DEVICE_WIFI (device)) {
+	if (devtype == NM_DEVICE_TYPE_WIFI) {
 		/* Attach to the access-point-added signal so that the manager can fill
 		 * non-SSID-broadcasting APs with an SSID.
 		 */
@@ -1437,25 +1527,21 @@ add_device (NMManager *self, NMDevice *device)
 		g_signal_connect (device, "notify::" NM_DEVICE_WIFI_IPW_RFKILL_STATE,
 		                  G_CALLBACK (manager_ipw_rfkill_state_changed),
 		                  self);
-		rtype = RFKILL_TYPE_WLAN;
-	} else if (NM_IS_DEVICE_MODEM (device)) {
+	} else if (devtype == NM_DEVICE_TYPE_MODEM) {
 		g_signal_connect (device, NM_DEVICE_MODEM_ENABLE_CHANGED,
 		                  G_CALLBACK (manager_modem_enabled_changed),
 		                  self);
-		rtype = RFKILL_TYPE_WWAN;
-#if WITH_WIMAX
-	} else if (NM_IS_DEVICE_WIMAX (device)) {
-		rtype = RFKILL_TYPE_WIMAX;
-#endif
 	}
 
+	/* Update global rfkill state for this device type with the device's
+	 * rfkill state, and then set this device's rfkill state based on the
+	 * global state.
+	 */
+	rtype = nm_device_get_rfkill_type (device);
 	if (rtype != RFKILL_TYPE_UNKNOWN) {
-		/* Update global rfkill state with this device's rfkill state, and
-		 * then set this device's rfkill state based on the global state.
-		 */
 		nm_manager_rfkill_update (self, rtype);
 		enabled = radio_enabled_for_type (self, rtype, TRUE);
-		nm_device_interface_set_enabled (NM_DEVICE_INTERFACE (device), enabled);
+		nm_device_set_enabled (device, enabled);
 	}
 
 	type_desc = nm_device_get_type_desc (device);
@@ -1477,12 +1563,11 @@ add_device (NMManager *self, NMDevice *device)
 	/* Check if we should assume the device's active connection by matching its
 	 * config with an existing system connection.
 	 */
-	if (nm_device_interface_can_assume_connections (NM_DEVICE_INTERFACE (device))) {
+	if (nm_device_can_assume_connections (device)) {
 		GSList *connections = NULL;
 
 		connections = nm_settings_get_connections (priv->settings);
-		existing = nm_device_interface_connection_match_config (NM_DEVICE_INTERFACE (device),
-		                                                        (const GSList *) connections);
+		existing = nm_device_connection_match_config (device, (const GSList *) connections);
 		g_slist_free (connections);
 
 		if (existing)
@@ -1494,7 +1579,7 @@ add_device (NMManager *self, NMDevice *device)
 	/* Start the device if it's supposed to be managed */
 	unmanaged_specs = nm_settings_get_unmanaged_specs (priv->settings);
 	if (   !manager_sleeping (self)
-	    && !nm_device_interface_spec_match_list (NM_DEVICE_INTERFACE (device), unmanaged_specs)) {
+	    && !nm_device_spec_match_list (device, unmanaged_specs)) {
 		nm_device_set_managed (device,
 		                       TRUE,
 		                       existing ? NM_DEVICE_STATE_REASON_CONNECTION_ASSUMED :
@@ -1570,14 +1655,14 @@ bluez_manager_find_connection (NMManager *manager,
 		const char *con_type;
 		const char *bt_type;
 
-		s_con = NM_SETTING_CONNECTION (nm_connection_get_setting (candidate, NM_TYPE_SETTING_CONNECTION));
+		s_con = nm_connection_get_setting_connection (candidate);
 		g_assert (s_con);
 		con_type = nm_setting_connection_get_connection_type (s_con);
 		g_assert (con_type);
 		if (!g_str_equal (con_type, NM_SETTING_BLUETOOTH_SETTING_NAME))
 			continue;
 
-		s_bt = (NMSettingBluetooth *) nm_connection_get_setting (candidate, NM_TYPE_SETTING_BLUETOOTH);
+		s_bt = nm_connection_get_setting_bluetooth (candidate);
 		if (!s_bt)
 			continue;
 
@@ -1612,7 +1697,7 @@ bluez_manager_resync_devices (NMManager *self)
 		guint32 uuids;
 		const char *bdaddr;
 
-		if (NM_IS_DEVICE_BT (candidate)) {
+		if (nm_device_get_device_type (candidate) == NM_DEVICE_TYPE_BT) {
 			uuids = nm_device_bt_get_capabilities (NM_DEVICE_BT (candidate));
 			bdaddr = nm_device_bt_get_hw_address (NM_DEVICE_BT (candidate));
 
@@ -1876,17 +1961,14 @@ internal_activate_device (NMManager *manager,
                           GError **error)
 {
 	NMActRequest *req;
-	NMDeviceInterface *dev_iface;
 	gboolean success;
 
 	g_return_val_if_fail (NM_IS_MANAGER (manager), NULL);
 	g_return_val_if_fail (NM_IS_DEVICE (device), NULL);
 	g_return_val_if_fail (NM_IS_CONNECTION (connection), NULL);
 
-	dev_iface = NM_DEVICE_INTERFACE (device);
-
 	/* Ensure the requested connection is compatible with the device */
-	if (!nm_device_interface_check_connection_compatible (dev_iface, connection, error))
+	if (!nm_device_check_connection_compatible (device, connection, error))
 		return NULL;
 
 	/* Tear down any existing connection */
@@ -1904,7 +1986,7 @@ internal_activate_device (NMManager *manager,
 	                          sender_uid,
 	                          assumed,
 	                          (gpointer) device);
-	success = nm_device_interface_activate (dev_iface, req, error);
+	success = nm_device_activate (device, req, error);
 	g_object_unref (req);
 
 	return success ? nm_act_request_get_active_connection_path (req) : NULL;
@@ -1948,7 +2030,7 @@ nm_manager_activate_connection (NMManager *manager,
 		}
 	}
 
-	s_con = NM_SETTING_CONNECTION (nm_connection_get_setting (connection, NM_TYPE_SETTING_CONNECTION));
+	s_con = nm_connection_get_setting_connection (connection);
 	g_assert (s_con);
 
 	if (!strcmp (nm_setting_connection_get_connection_type (s_con), NM_SETTING_VPN_SETTING_NAME)) {
@@ -2010,7 +2092,7 @@ nm_manager_activate_connection (NMManager *manager,
 			return NULL;
 		}
 
-		state = nm_device_interface_get_state (NM_DEVICE_INTERFACE (device));
+		state = nm_device_get_state (device);
 		if (state < NM_DEVICE_STATE_DISCONNECTED) {
 			g_set_error (error,
 			             NM_MANAGER_ERROR, NM_MANAGER_ERROR_UNMANAGED_DEVICE,
@@ -2384,7 +2466,6 @@ do_sleep_wake (NMManager *self)
 			for (i = 0; i < RFKILL_TYPE_MAX; i++) {
 				RadioState *rstate = &priv->radio_states[i];
 				gboolean enabled = radio_enabled_for_rstate (rstate, TRUE);
-				RfKillType devtype = RFKILL_TYPE_UNKNOWN;
 
 				if (rstate->desc) {
 					nm_log_dbg (LOGD_RFKILL, "%s %s devices (hw_enabled %d, sw_enabled %d, user_enabled %d)",
@@ -2392,13 +2473,12 @@ do_sleep_wake (NMManager *self)
 					            rstate->desc, rstate->hw_enabled, rstate->sw_enabled, rstate->user_enabled);
 				}
 
-				g_object_get (G_OBJECT (device), NM_DEVICE_INTERFACE_RFKILL_TYPE, &devtype, NULL);
-				if (devtype == rstate->rtype)
-					nm_device_interface_set_enabled (NM_DEVICE_INTERFACE (device), enabled);
+				if (nm_device_get_rfkill_type (device) == rstate->rtype)
+					nm_device_set_enabled (device, enabled);
 			}
 
 			nm_device_clear_autoconnect_inhibit (device);
-			if (nm_device_interface_spec_match_list (NM_DEVICE_INTERFACE (device), unmanaged_specs))
+			if (nm_device_spec_match_list (device, unmanaged_specs))
 				nm_device_set_managed (device, FALSE, NM_DEVICE_STATE_REASON_NOW_UNMANAGED);
 			else
 				nm_device_set_managed (device, TRUE, NM_DEVICE_STATE_REASON_NOW_MANAGED);
@@ -2823,6 +2903,12 @@ nm_manager_start (NMManager *self)
 
 	nm_udev_manager_query_devices (priv->udev_mgr);
 	bluez_manager_resync_devices (self);
+
+	/*
+	 * Connections added before the manager is started do not emit
+	 * connection-added signals thus devices have to be created manually.
+	 */
+	system_create_virtual_devices (priv->settings);
 }
 
 static gboolean
@@ -3099,13 +3185,13 @@ nm_manager_new (NMSettings *settings,
 	g_signal_connect (priv->settings, "notify::" NM_SETTINGS_HOSTNAME,
 	                  G_CALLBACK (system_hostname_changed_cb), singleton);
 	g_signal_connect (priv->settings, NM_SETTINGS_SIGNAL_CONNECTION_ADDED,
-	                  G_CALLBACK (connections_changed), singleton);
+	                  G_CALLBACK (connection_added), singleton);
 	g_signal_connect (priv->settings, NM_SETTINGS_SIGNAL_CONNECTION_UPDATED,
-	                  G_CALLBACK (connections_changed), singleton);
+	                  G_CALLBACK (connection_changed), singleton);
 	g_signal_connect (priv->settings, NM_SETTINGS_SIGNAL_CONNECTION_REMOVED,
-	                  G_CALLBACK (connections_changed), singleton);
+	                  G_CALLBACK (connection_removed), singleton);
 	g_signal_connect (priv->settings, NM_SETTINGS_SIGNAL_CONNECTION_VISIBILITY_CHANGED,
-	                  G_CALLBACK (connections_changed), singleton);
+	                  G_CALLBACK (connection_changed), singleton);
 
 	dbus_g_connection_register_g_object (bus, NM_DBUS_PATH, G_OBJECT (singleton));
 

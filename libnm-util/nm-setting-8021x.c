@@ -19,7 +19,7 @@
  * Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
  * Boston, MA 02110-1301 USA.
  *
- * (C) Copyright 2007 - 2011 Red Hat, Inc.
+ * (C) Copyright 2007 - 2012 Red Hat, Inc.
  * (C) Copyright 2007 - 2008 Novell, Inc.
  */
 
@@ -115,6 +115,7 @@ typedef struct {
 	GSList *eap; /* GSList of strings */
 	char *identity;
 	char *anonymous_identity;
+	char *pac_file;
 	GByteArray *ca_cert;
 	char *ca_path;
 	char *subject_match;
@@ -132,6 +133,8 @@ typedef struct {
 	GByteArray *phase2_client_cert;
 	char *password;
 	NMSettingSecretFlags password_flags;
+	GByteArray *password_raw;
+	NMSettingSecretFlags password_raw_flags;
 	char *pin;
 	NMSettingSecretFlags pin_flags;
 	GByteArray *private_key;
@@ -148,6 +151,7 @@ enum {
 	PROP_EAP,
 	PROP_IDENTITY,
 	PROP_ANONYMOUS_IDENTITY,
+	PROP_PAC_FILE,
 	PROP_CA_CERT,
 	PROP_CA_PATH,
 	PROP_SUBJECT_MATCH,
@@ -165,6 +169,8 @@ enum {
 	PROP_PHASE2_CLIENT_CERT,
 	PROP_PASSWORD,
 	PROP_PASSWORD_FLAGS,
+	PROP_PASSWORD_RAW,
+	PROP_PASSWORD_RAW_FLAGS,
 	PROP_PRIVATE_KEY,
 	PROP_PRIVATE_KEY_PASSWORD,
 	PROP_PRIVATE_KEY_PASSWORD_FLAGS,
@@ -339,6 +345,22 @@ nm_setting_802_1x_get_anonymous_identity (NMSetting8021x *setting)
 	g_return_val_if_fail (NM_IS_SETTING_802_1X (setting), NULL);
 
 	return NM_SETTING_802_1X_GET_PRIVATE (setting)->anonymous_identity;
+}
+
+/**
+ * nm_setting_802_1x_get_pac_file:
+ * @setting: the #NMSetting8021x
+ *
+ * Returns the file containing PAC credentials used by EAP-FAST method.
+ *
+ * Returns: the PAC file
+ **/
+const char *
+nm_setting_802_1x_get_pac_file (NMSetting8021x *setting)
+{
+	g_return_val_if_fail (NM_IS_SETTING_802_1X (setting), NULL);
+
+	return NM_SETTING_802_1X_GET_PRIVATE (setting)->pac_file;
 }
 
 /**
@@ -1466,6 +1488,37 @@ nm_setting_802_1x_get_password_flags (NMSetting8021x *setting)
 }
 
 /**
+ * nm_setting_802_1x_get_password_raw:
+ * @setting: the #NMSetting8021x
+ *
+ * Returns: the password used by the authentication method as a
+ * UTF-8-encoded array of bytes, as specified by the
+ * #NMSetting8021x:password-raw property
+ **/
+const GByteArray *
+nm_setting_802_1x_get_password_raw (NMSetting8021x *setting)
+{
+	g_return_val_if_fail (NM_IS_SETTING_802_1X (setting), NULL);
+
+	return NM_SETTING_802_1X_GET_PRIVATE (setting)->password_raw;
+}
+
+/**
+ * nm_setting_802_1x_get_password_raw_flags:
+ * @setting: the #NMSetting8021x
+ *
+ * Returns: the #NMSettingSecretFlags pertaining to the
+ *   #NMSetting8021x:password-raw
+ **/
+NMSettingSecretFlags
+nm_setting_802_1x_get_password_raw_flags (NMSetting8021x *setting)
+{
+	g_return_val_if_fail (NM_IS_SETTING_802_1X (setting), NM_SETTING_SECRET_FLAG_NONE);
+
+	return NM_SETTING_802_1X_GET_PRIVATE (setting)->password_raw_flags;
+}
+
+/**
  * nm_setting_802_1x_get_pin:
  * @setting: the #NMSetting8021x
  *
@@ -2044,8 +2097,11 @@ need_secrets_password (NMSetting8021x *self,
 {
 	NMSetting8021xPrivate *priv = NM_SETTING_802_1X_GET_PRIVATE (self);
 
-	if (!priv->password || !strlen (priv->password))
+	if (   (!priv->password || !strlen (priv->password))
+	    && (!priv->password_raw || !priv->password_raw->len)) {
 		g_ptr_array_add (secrets, NM_SETTING_802_1X_PASSWORD);
+		g_ptr_array_add (secrets, NM_SETTING_802_1X_PASSWORD_RAW);
+	}
 }
 
 static void
@@ -2592,6 +2648,8 @@ finalize (GObject *object)
 	g_free (priv->phase2_ca_path);
 	g_free (priv->phase2_subject_match);
 	g_free (priv->password);
+	if (priv->password_raw)
+		g_byte_array_free (priv->password_raw, TRUE);
 
 	nm_utils_slist_free (priv->eap, g_free);
 	nm_utils_slist_free (priv->altsubject_matches, g_free);
@@ -2653,6 +2711,10 @@ set_property (GObject *object, guint prop_id,
 	case PROP_ANONYMOUS_IDENTITY:
 		g_free (priv->anonymous_identity);
 		priv->anonymous_identity = g_value_dup_string (value);
+		break;
+	case PROP_PAC_FILE:
+		g_free (priv->pac_file);
+		priv->pac_file = g_value_dup_string (value);
 		break;
 	case PROP_CA_CERT:
 		if (priv->ca_cert) {
@@ -2753,6 +2815,14 @@ set_property (GObject *object, guint prop_id,
 	case PROP_PASSWORD_FLAGS:
 		priv->password_flags = g_value_get_uint (value);
 		break;
+	case PROP_PASSWORD_RAW:
+		if (priv->password_raw)
+			g_byte_array_free (priv->password_raw, TRUE);
+		priv->password_raw = g_value_dup_boxed (value);
+		break;
+	case PROP_PASSWORD_RAW_FLAGS:
+		priv->password_raw_flags = g_value_get_uint (value);
+		break;
 	case PROP_PRIVATE_KEY:
 		if (priv->private_key) {
 			g_byte_array_free (priv->private_key, TRUE);
@@ -2817,6 +2887,9 @@ get_property (GObject *object, guint prop_id,
 	case PROP_ANONYMOUS_IDENTITY:
 		g_value_set_string (value, priv->anonymous_identity);
 		break;
+	case PROP_PAC_FILE:
+		g_value_set_string (value, priv->pac_file);
+		break;
 	case PROP_CA_CERT:
 		g_value_set_boxed (value, priv->ca_cert);
 		break;
@@ -2867,6 +2940,12 @@ get_property (GObject *object, guint prop_id,
 		break;
 	case PROP_PASSWORD_FLAGS:
 		g_value_set_uint (value, priv->password_flags);
+		break;
+	case PROP_PASSWORD_RAW:
+		g_value_set_boxed (value, priv->password_raw);
+		break;
+	case PROP_PASSWORD_RAW_FLAGS:
+		g_value_set_uint (value, priv->password_raw_flags);
 		break;
 	case PROP_PRIVATE_KEY:
 		g_value_set_boxed (value, priv->private_key);
@@ -2967,6 +3046,19 @@ nm_setting_802_1x_class_init (NMSetting8021xClass *setting_class)
 						  "methods.  Used as the unencrypted identity with EAP "
 						  "types that support different tunneled identity like "
 						  "EAP-TTLS.",
+						  NULL,
+						  G_PARAM_READWRITE | NM_SETTING_PARAM_SERIALIZE));
+
+	/**
+	 * NMSetting8021x:pac-file:
+	 *
+	 * UTF-8 encoded file path containing PAC for EAP-FAST.
+	 **/
+	g_object_class_install_property
+		(object_class, PROP_PAC_FILE,
+		 g_param_spec_string (NM_SETTING_802_1X_PAC_FILE,
+						  "PAC file",
+						  "UTF-8 encoded file path containing PAC for EAP-FAST.",
 						  NULL,
 						  G_PARAM_READWRITE | NM_SETTING_PARAM_SERIALIZE));
 
@@ -3324,7 +3416,9 @@ nm_setting_802_1x_class_init (NMSetting8021xClass *setting_class)
 	/**
 	 * NMSetting8021x:password:
 	 *
-	 * Password used for EAP authentication methods.
+	 * Password used for EAP authentication methods. If both
+	 * #NMSetting8021x:password and #NMSetting8021x:password-raw are
+	 * specified, #NMSetting8021x:password is preferred.
 	 **/
 	g_object_class_install_property
 		(object_class, PROP_PASSWORD,
@@ -3343,6 +3437,36 @@ nm_setting_802_1x_class_init (NMSetting8021xClass *setting_class)
 		 g_param_spec_uint (NM_SETTING_802_1X_PASSWORD_FLAGS,
 		                    "Password Flags",
 		                    "Flags indicating how to handle the 802.1x password.",
+		                    NM_SETTING_SECRET_FLAG_NONE,
+		                    NM_SETTING_SECRET_FLAGS_ALL,
+		                    NM_SETTING_SECRET_FLAG_NONE,
+		                    G_PARAM_READWRITE | NM_SETTING_PARAM_SERIALIZE));
+
+	/**
+	 * NMSetting8021x:password-raw:
+	 *
+	 * Password used for EAP authentication methods delivered as a
+	 * UTF-8-encoded array of bytes. If both #NMSetting8021x:password
+	 * and #NMSetting8021x:password-raw are specified,
+	 * #NMSetting8021x:password is preferred.
+	 **/
+	g_object_class_install_property
+		(object_class, PROP_PASSWORD_RAW,
+		 _nm_param_spec_specialized (NM_SETTING_802_1X_PASSWORD_RAW,
+		                             "Password byte array",
+		                             "Password used for EAP authentication methods as a byte array",
+		                             DBUS_TYPE_G_UCHAR_ARRAY,
+		                             G_PARAM_READWRITE | NM_SETTING_PARAM_SERIALIZE | NM_SETTING_PARAM_SECRET));
+
+	/**
+	 * NMSetting8021x:password-raw-flags:
+	 *
+	 * Flags indicating how to handle #NMSetting8021x:password-raw:.
+	 **/
+	g_object_class_install_property (object_class, PROP_PASSWORD_RAW_FLAGS,
+		 g_param_spec_uint (NM_SETTING_802_1X_PASSWORD_RAW_FLAGS,
+		                    "Password byte array Flags",
+		                    "Flags indicating how to handle the 802.1x password byte array.",
 		                    NM_SETTING_SECRET_FLAG_NONE,
 		                    NM_SETTING_SECRET_FLAGS_ALL,
 		                    NM_SETTING_SECRET_FLAG_NONE,

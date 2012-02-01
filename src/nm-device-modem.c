@@ -21,7 +21,6 @@
 #include <glib.h>
 
 #include "nm-device-modem.h"
-#include "nm-device-interface.h"
 #include "nm-modem.h"
 #include "nm-modem-cdma.h"
 #include "nm-modem-gsm.h"
@@ -31,10 +30,7 @@
 #include "nm-marshal.h"
 #include "nm-logging.h"
 
-static void device_interface_init (NMDeviceInterface *iface_class);
-
-G_DEFINE_TYPE_EXTENDED (NMDeviceModem, nm_device_modem, NM_TYPE_DEVICE, 0,
-                        G_IMPLEMENT_INTERFACE (NM_TYPE_DEVICE_INTERFACE, device_interface_init))
+G_DEFINE_TYPE (NMDeviceModem, nm_device_modem, NM_TYPE_DEVICE)
 
 #define NM_DEVICE_MODEM_GET_PRIVATE(o) (G_TYPE_INSTANCE_GET_PRIVATE ((o), NM_TYPE_DEVICE_MODEM, NMDeviceModemPrivate))
 
@@ -60,7 +56,7 @@ enum {
 };
 static guint signals[LAST_SIGNAL] = { 0 };
 
-static void real_set_enabled (NMDeviceInterface *device, gboolean enabled);
+static void real_set_enabled (NMDevice *device, gboolean enabled);
 
 /*****************************************************************************/
 
@@ -69,16 +65,16 @@ ppp_failed (NMModem *modem, NMDeviceStateReason reason, gpointer user_data)
 {
 	NMDevice *device = NM_DEVICE (user_data);
 
-	switch (nm_device_interface_get_state (NM_DEVICE_INTERFACE (device))) {
+	switch (nm_device_get_state (device)) {
 	case NM_DEVICE_STATE_PREPARE:
 	case NM_DEVICE_STATE_CONFIG:
 	case NM_DEVICE_STATE_NEED_AUTH:
-	case NM_DEVICE_STATE_IP_CHECK:
-	case NM_DEVICE_STATE_SECONDARIES:
-	case NM_DEVICE_STATE_ACTIVATED:
 		nm_device_state_changed (device, NM_DEVICE_STATE_FAILED, reason);
 		break;
 	case NM_DEVICE_STATE_IP_CONFIG:
+	case NM_DEVICE_STATE_IP_CHECK:
+	case NM_DEVICE_STATE_SECONDARIES:
+	case NM_DEVICE_STATE_ACTIVATED:
 		if (nm_device_ip_config_should_fail (device, FALSE)) {
 			nm_device_state_changed (device,
 			                         NM_DEVICE_STATE_FAILED,
@@ -99,7 +95,7 @@ modem_prepare_result (NMModem *modem,
 	NMDevice *device = NM_DEVICE (user_data);
 	NMDeviceState state;
 
-	state = nm_device_interface_get_state (NM_DEVICE_INTERFACE (device));
+	state = nm_device_get_state (device);
 	g_return_if_fail (state == NM_DEVICE_STATE_PREPARE);
 
 	if (success)
@@ -140,10 +136,8 @@ modem_ip4_config_result (NMModem *self,
                          gpointer user_data)
 {
 	NMDevice *device = NM_DEVICE (user_data);
-	NMDeviceState state;
 
-	state = nm_device_interface_get_state (NM_DEVICE_INTERFACE (device));
-	g_return_if_fail (state == NM_DEVICE_STATE_IP_CONFIG);
+	g_return_if_fail (nm_device_activate_ip4_state_in_conf (device) == TRUE);
 
 	if (error) {
 		nm_log_warn (LOGD_MB | LOGD_IP4, "retrieving IP4 configuration failed: (%d) %s",
@@ -155,7 +149,7 @@ modem_ip4_config_result (NMModem *self,
 		if (iface)
 			nm_device_set_ip_iface (device, iface);
 
-		nm_device_activate_schedule_stage4_ip4_config_get (device);
+		nm_device_activate_schedule_ip4_config_result (device, config);
 	}
 }
 
@@ -165,7 +159,7 @@ modem_enabled_cb (NMModem *modem, GParamSpec *pspec, gpointer user_data)
 	NMDeviceModem *self = NM_DEVICE_MODEM (user_data);
 	NMDeviceModemPrivate *priv = NM_DEVICE_MODEM_GET_PRIVATE (self);
 
-	real_set_enabled (NM_DEVICE_INTERFACE (self), nm_modem_get_mm_enabled (priv->modem));
+	real_set_enabled (NM_DEVICE (self), nm_modem_get_mm_enabled (priv->modem));
 
 	g_signal_emit (G_OBJECT (self), signals[ENABLE_CHANGED], 0);
 }
@@ -275,7 +269,9 @@ real_act_stage2_config (NMDevice *device, NMDeviceStateReason *reason)
 }
 
 static NMActStageReturn
-real_act_stage3_ip4_config_start (NMDevice *device, NMDeviceStateReason *reason)
+real_act_stage3_ip4_config_start (NMDevice *device,
+                                  NMIP4Config **out_config,
+                                  NMDeviceStateReason *reason)
 {
 	return nm_modem_stage3_ip4_config_start (NM_DEVICE_MODEM_GET_PRIVATE (device)->modem,
 	                                         device,
@@ -283,28 +279,16 @@ real_act_stage3_ip4_config_start (NMDevice *device, NMDeviceStateReason *reason)
 	                                         reason);
 }
 
-static NMActStageReturn
-real_act_stage4_get_ip4_config (NMDevice *device,
-                                NMIP4Config **config,
-                                NMDeviceStateReason *reason)
-{
-	return nm_modem_stage4_get_ip4_config (NM_DEVICE_MODEM_GET_PRIVATE (device)->modem,
-	                                       device,
-	                                       NM_DEVICE_CLASS (nm_device_modem_parent_class),
-	                                       config,
-	                                       reason);
-}
-
 /*****************************************************************************/
 
 static gboolean
-real_get_enabled (NMDeviceInterface *device)
+real_get_enabled (NMDevice *device)
 {
 	return nm_modem_get_mm_enabled (NM_DEVICE_MODEM_GET_PRIVATE (device)->modem);
 }
 
 static void
-real_set_enabled (NMDeviceInterface *device, gboolean enabled)
+real_set_enabled (NMDevice *device, gboolean enabled)
 {
 	NMDeviceModem *self = NM_DEVICE_MODEM (device);
 	NMDeviceModemPrivate *priv = NM_DEVICE_MODEM_GET_PRIVATE (self);
@@ -314,7 +298,7 @@ real_set_enabled (NMDeviceInterface *device, gboolean enabled)
 		nm_modem_set_mm_enabled (priv->modem, enabled);
 
 		if (enabled == FALSE) {
-			state = nm_device_interface_get_state (device);
+			state = nm_device_get_state (NM_DEVICE (device));
 			if (state == NM_DEVICE_STATE_ACTIVATED) {
 				nm_device_state_changed (NM_DEVICE (device),
 				                         NM_DEVICE_STATE_DISCONNECTED,
@@ -348,23 +332,16 @@ nm_device_modem_new (NMModem *modem, const char *driver)
 	}
 
 	return (NMDevice *) g_object_new (NM_TYPE_DEVICE_MODEM,
-	                                  NM_DEVICE_INTERFACE_UDI, nm_modem_get_path (modem),
-	                                  NM_DEVICE_INTERFACE_IFACE, nm_modem_get_iface (modem),
-	                                  NM_DEVICE_INTERFACE_DRIVER, driver,
-	                                  NM_DEVICE_INTERFACE_TYPE_DESC, type_desc,
-	                                  NM_DEVICE_INTERFACE_DEVICE_TYPE, NM_DEVICE_TYPE_MODEM,
-	                                  NM_DEVICE_INTERFACE_RFKILL_TYPE, RFKILL_TYPE_WWAN,
+	                                  NM_DEVICE_UDI, nm_modem_get_path (modem),
+	                                  NM_DEVICE_IFACE, nm_modem_get_iface (modem),
+	                                  NM_DEVICE_DRIVER, driver,
+	                                  NM_DEVICE_TYPE_DESC, type_desc,
+	                                  NM_DEVICE_DEVICE_TYPE, NM_DEVICE_TYPE_MODEM,
+	                                  NM_DEVICE_RFKILL_TYPE, RFKILL_TYPE_WWAN,
 	                                  NM_DEVICE_MODEM_MODEM, modem,
 	                                  NM_DEVICE_MODEM_CAPABILITIES, caps,
 	                                  NM_DEVICE_MODEM_CURRENT_CAPABILITIES, caps,
 	                                  NULL);
-}
-
-static void
-device_interface_init (NMDeviceInterface *iface_class)
-{
-    iface_class->get_enabled = real_get_enabled;
-    iface_class->set_enabled = real_set_enabled;
 }
 
 static void
@@ -469,7 +446,8 @@ nm_device_modem_class_init (NMDeviceModemClass *mclass)
 	device_class->act_stage1_prepare = real_act_stage1_prepare;
 	device_class->act_stage2_config = real_act_stage2_config;
 	device_class->act_stage3_ip4_config_start = real_act_stage3_ip4_config_start;
-	device_class->act_stage4_get_ip4_config = real_act_stage4_get_ip4_config;
+	device_class->get_enabled = real_get_enabled;
+    device_class->set_enabled = real_set_enabled;
 
 	/* Properties */
 	g_object_class_install_property

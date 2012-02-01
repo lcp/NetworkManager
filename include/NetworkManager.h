@@ -47,6 +47,7 @@
 #define NM_DBUS_INTERFACE_DHCP4_CONFIG      NM_DBUS_INTERFACE ".DHCP4Config"
 #define NM_DBUS_INTERFACE_IP6_CONFIG        NM_DBUS_INTERFACE ".IP6Config"
 #define NM_DBUS_INTERFACE_DHCP6_CONFIG      NM_DBUS_INTERFACE ".DHCP6Config"
+#define NM_DBUS_INTERFACE_DEVICE_INFINIBAND NM_DBUS_INTERFACE_DEVICE ".Infiniband"
 
 
 #define NM_DBUS_IFACE_SETTINGS            "org.freedesktop.NetworkManager.Settings"
@@ -101,19 +102,22 @@ typedef enum {
  * @NM_DEVICE_TYPE_WIMAX: an 802.16e Mobile WiMAX broadband device
  * @NM_DEVICE_TYPE_MODEM: a modem supporting analog telephone, CDMA/EVDO,
  * GSM/UMTS, or LTE network access protocols
+ * @NM_DEVICE_TYPE_INFINIBAND: an IP-over-Infiniband device
  *
- * #NMState values indicate the current overall networking state.
+ * #NMDeviceType values indicate the type of hardware represented by
+ * an #NMDevice.
  **/
 typedef enum {
-	NM_DEVICE_TYPE_UNKNOWN   = 0,
-	NM_DEVICE_TYPE_ETHERNET  = 1,
-	NM_DEVICE_TYPE_WIFI      = 2,
-	NM_DEVICE_TYPE_UNUSED1   = 3,
-	NM_DEVICE_TYPE_UNUSED2   = 4,
-	NM_DEVICE_TYPE_BT        = 5,  /* Bluetooth */
-	NM_DEVICE_TYPE_OLPC_MESH = 6,
-	NM_DEVICE_TYPE_WIMAX     = 7,
-	NM_DEVICE_TYPE_MODEM     = 8,
+	NM_DEVICE_TYPE_UNKNOWN    = 0,
+	NM_DEVICE_TYPE_ETHERNET   = 1,
+	NM_DEVICE_TYPE_WIFI       = 2,
+	NM_DEVICE_TYPE_UNUSED1    = 3,
+	NM_DEVICE_TYPE_UNUSED2    = 4,
+	NM_DEVICE_TYPE_BT         = 5,  /* Bluetooth */
+	NM_DEVICE_TYPE_OLPC_MESH  = 6,
+	NM_DEVICE_TYPE_WIMAX      = 7,
+	NM_DEVICE_TYPE_MODEM      = 8,
+	NM_DEVICE_TYPE_INFINIBAND = 9,
 } NMDeviceType;
 
 /**
@@ -141,6 +145,7 @@ typedef enum {
  * @NM_WIFI_DEVICE_CAP_CIPHER_CCMP: device supports AES/CCMP encryption
  * @NM_WIFI_DEVICE_CAP_WPA: device supports WPA1 authentication
  * @NM_WIFI_DEVICE_CAP_RSN: device supports WPA2/RSN authentication
+ * @NM_WIFI_DEVICE_CAP_AP: device supports Access Point mode
  *
  * 802.11 specific device encryption and authentication capabilities.
  **/
@@ -152,7 +157,8 @@ typedef enum {
 	NM_WIFI_DEVICE_CAP_CIPHER_TKIP   = 0x00000004,
 	NM_WIFI_DEVICE_CAP_CIPHER_CCMP   = 0x00000008,
 	NM_WIFI_DEVICE_CAP_WPA           = 0x00000010,
-	NM_WIFI_DEVICE_CAP_RSN           = 0x00000020
+	NM_WIFI_DEVICE_CAP_RSN           = 0x00000020,
+	NM_WIFI_DEVICE_CAP_AP            = 0x00000040
 } NMDeviceWifiCapabilities;
 
 
@@ -460,6 +466,21 @@ typedef enum {
 
 	/* The Bluetooth connection failed or timed out */
 	NM_DEVICE_STATE_REASON_BT_FAILED = 44,
+
+	/* GSM Modem's SIM Card not inserted */
+	NM_DEVICE_STATE_REASON_GSM_SIM_NOT_INSERTED = 45,
+
+	/* GSM Modem's SIM Pin required */
+	NM_DEVICE_STATE_REASON_GSM_SIM_PIN_REQUIRED = 46,
+
+	/* GSM Modem's SIM Puk required */
+	NM_DEVICE_STATE_REASON_GSM_SIM_PUK_REQUIRED = 47,
+
+	/* GSM Modem's SIM wrong */
+	NM_DEVICE_STATE_REASON_GSM_SIM_WRONG = 48,
+
+	/* Infiniband device does not support connected mode */
+	NM_DEVICE_STATE_REASON_INFINIBAND_MODE = 49,
 
 	/* Unused */
 	NM_DEVICE_STATE_REASON_LAST = 0xFFFF

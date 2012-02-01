@@ -112,6 +112,14 @@ typedef struct {
 } NMIP6Device;
 
 static void
+clear_config_changed (NMIP6Device *device)
+{
+	if (device->config_changed_id)
+		g_source_remove (device->config_changed_id);
+	device->config_changed_id = 0;
+}
+
+static void
 nm_ip6_device_destroy (NMIP6Device *device)
 {
 	g_return_if_fail (device != NULL);
@@ -124,8 +132,9 @@ nm_ip6_device_destroy (NMIP6Device *device)
 
 	if (device->finish_addrconf_id)
 		g_source_remove (device->finish_addrconf_id);
-	if (device->config_changed_id)
-		g_source_remove (device->config_changed_id);
+
+	clear_config_changed (device);
+
 	g_free (device->iface);
 	if (device->rdnss_servers)
 		g_array_free (device->rdnss_servers, TRUE);
@@ -267,6 +276,7 @@ rdnss_expired (gpointer user_data)
 	nm_log_dbg (LOGD_IP6, "(%s): IPv6 RDNSS information expired", device->iface);
 
 	set_rdnss_timeout (device);
+	clear_config_changed (device);
 	emit_config_changed (&info);
 	return FALSE;
 }
@@ -321,11 +331,12 @@ static gboolean
 dnssl_expired (gpointer user_data)
 {
 	NMIP6Device *device = user_data;
-	CallbackInfo info = { device, IP6_DHCP_OPT_NONE };
+	CallbackInfo info = { device, IP6_DHCP_OPT_NONE, FALSE };
 
 	nm_log_dbg (LOGD_IP6, "(%s): IPv6 DNSSL information expired", device->iface);
 
 	set_dnssl_timeout (device);
+	clear_config_changed (device);
 	emit_config_changed (&info);
 	return FALSE;
 }
@@ -972,6 +983,28 @@ static struct nla_policy link_prot_policy[IFLA_INET6_MAX + 1] = {
 	[IFLA_INET6_FLAGS]	= { .type = NLA_U32 },
 };
 
+static char *
+ra_flags_to_string (guint32 ra_flags)
+{
+	GString *s = g_string_sized_new (20);
+
+	g_string_append (s, " (");
+	if (ra_flags & IF_RS_SENT)
+		g_string_append_c (s, 'S');
+
+	if (ra_flags & IF_RA_RCVD)
+		g_string_append_c (s, 'R');
+
+	if (ra_flags & IF_RA_OTHERCONF)
+		g_string_append_c (s, 'O');
+
+	if (ra_flags & IF_RA_MANAGED)
+		g_string_append_c (s, 'M');
+
+	g_string_append_c (s, ')');
+	return g_string_free (s, FALSE);
+}
+
 static NMIP6Device *
 process_newlink (NMIP6Manager *manager, struct nl_msg *msg)
 {
@@ -981,6 +1014,7 @@ process_newlink (NMIP6Manager *manager, struct nl_msg *msg)
 	struct nlattr *tb[IFLA_MAX + 1];
 	struct nlattr *pi[IFLA_INET6_MAX + 1];
 	int err;
+	char *flags_str = NULL;
 
 	/* FIXME: we have to do this manually for now since libnl doesn't yet
 	 * support the IFLA_PROTINFO attribute of NEWLINK messages.  When it does,
@@ -1024,7 +1058,12 @@ process_newlink (NMIP6Manager *manager, struct nl_msg *msg)
 	}
 
 	device->ra_flags = nla_get_u32 (pi[IFLA_INET6_FLAGS]);
-	nm_log_dbg (LOGD_IP6, "(%s): got IPv6 flags 0x%X", device->iface, device->ra_flags);
+
+	if (nm_logging_level_enabled (LOGL_DEBUG))
+		flags_str = ra_flags_to_string (device->ra_flags);
+	nm_log_dbg (LOGD_IP6, "(%s): got IPv6 flags 0x%X%s",
+	            device->iface, device->ra_flags, flags_str ? flags_str : "");
+	g_free (flags_str);
 
 	return device;
 }
@@ -1038,7 +1077,7 @@ netlink_notification (NMNetlinkMonitor *monitor, struct nl_msg *msg, gpointer us
 	gboolean config_changed = FALSE;
 
 	hdr = nlmsg_hdr (msg);
-	nm_log_dbg (LOGD_HW, "netlink notificate type %d", hdr->nlmsg_type);
+	nm_log_dbg (LOGD_HW, "netlink event type %d", hdr->nlmsg_type);
 	switch (hdr->nlmsg_type) {
 	case RTM_NEWADDR:
 	case RTM_DELADDR:
@@ -1354,6 +1393,7 @@ nm_ip6_manager_init (NMIP6Manager *manager)
 	priv->monitor = nm_netlink_monitor_get ();
 	nm_netlink_monitor_subscribe (priv->monitor, RTNLGRP_IPV6_IFADDR, NULL);
 	nm_netlink_monitor_subscribe (priv->monitor, RTNLGRP_IPV6_PREFIX, NULL);
+	nm_netlink_monitor_subscribe (priv->monitor, RTNLGRP_IPV6_ROUTE, NULL);
 	nm_netlink_monitor_subscribe (priv->monitor, RTNLGRP_ND_USEROPT, NULL);
 	nm_netlink_monitor_subscribe (priv->monitor, RTNLGRP_LINK, NULL);
 
