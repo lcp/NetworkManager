@@ -64,6 +64,7 @@
  **/
 
 #define SCHEME_PATH "file://"
+#define SCHEME_HASH "hash://server/sha256/"
 
 /**
  * nm_setting_802_1x_error_quark:
@@ -388,6 +389,9 @@ get_cert_scheme (GByteArray *array)
 	if (   (array->len > strlen (SCHEME_PATH))
 	    && !memcmp (array->data, SCHEME_PATH, strlen (SCHEME_PATH)))
 		return NM_SETTING_802_1X_CK_SCHEME_PATH;
+	else if (   (array->len > strlen (SCHEME_HASH))
+	         && !memcmp (array->data, SCHEME_HASH, strlen (SCHEME_HASH)))
+		return NM_SETTING_802_1X_CK_SCHEME_HASH;
 
 	return NM_SETTING_802_1X_CK_SCHEME_BLOB;
 }
@@ -398,7 +402,8 @@ get_cert_scheme (GByteArray *array)
  *
  * Returns the scheme used to store the CA certificate.  If the returned scheme
  * is %NM_SETTING_802_1X_CK_SCHEME_BLOB, use nm_setting_802_1x_get_ca_cert_blob();
- * if %NM_SETTING_802_1X_CK_SCHEME_PATH, use nm_setting_802_1x_get_ca_cert_path().
+ * if %NM_SETTING_802_1X_CK_SCHEME_PATH, use nm_setting_802_1x_get_ca_cert_path();
+ * if %NM_SETTING_802_1X_CK_SCHEME_HASH, use nm_setting_802_1x_get_ca_cert_hash().
  *
  * Returns: scheme used to store the CA certificate (blob or path)
  **/
@@ -462,6 +467,32 @@ nm_setting_802_1x_get_ca_cert_path (NMSetting8021x *setting)
 	return (const char *) (NM_SETTING_802_1X_GET_PRIVATE (setting)->ca_cert->data + strlen (SCHEME_PATH));
 }
 
+/**
+ * nm_setting_802_1x_get_ca_cert_hash:
+ * @setting: the #NMSetting8021x
+ *
+ * Returns the CA certificate path if the CA certificate is stored using the
+ * %NM_SETTING_802_1X_CK_SCHEME_HASH scheme.  Not all EAP methods use a
+ * CA certificate (LEAP for example), and those that can take advantage of the
+ * CA certificate allow it to be unset.  Note that lack of a CA certificate
+ * reduces security by allowing man-in-the-middle attacks, because the identity
+ * of the network cannot be confirmed by the client.
+ *
+ * Returns: hash of the RADIUS server
+ **/
+const char *
+nm_setting_802_1x_get_ca_cert_hash (NMSetting8021x *setting)
+{
+	NMSetting8021xCKScheme scheme;
+
+	g_return_val_if_fail (NM_IS_SETTING_802_1X (setting), NULL);
+
+	scheme = nm_setting_802_1x_get_ca_cert_scheme (setting);
+	g_return_val_if_fail (scheme == NM_SETTING_802_1X_CK_SCHEME_HASH, NULL);
+
+	return (const char *) (NM_SETTING_802_1X_GET_PRIVATE (setting)->ca_cert->data);
+}
+
 static GByteArray *
 path_to_scheme_value (const char *path)
 {
@@ -513,7 +544,8 @@ nm_setting_802_1x_set_ca_cert (NMSetting8021x *self,
 	if (cert_path) {
 		g_return_val_if_fail (g_utf8_validate (cert_path, -1, NULL), FALSE);
 		g_return_val_if_fail (   scheme == NM_SETTING_802_1X_CK_SCHEME_BLOB
-		                      || scheme == NM_SETTING_802_1X_CK_SCHEME_PATH,
+		                      || scheme == NM_SETTING_802_1X_CK_SCHEME_PATH
+		                      || scheme == NM_SETTING_802_1X_CK_SCHEME_HASH,
 		                      FALSE);
 	}
 
@@ -530,6 +562,17 @@ nm_setting_802_1x_set_ca_cert (NMSetting8021x *self,
 
 	if (!cert_path)
 		return TRUE;
+
+	if (scheme == NM_SETTING_802_1X_CK_SCHEME_HASH) {
+		int length = strlen (cert_path);
+		if (   length == (strlen (SCHEME_HASH) + 64)
+		    && !g_str_has_prefix (cert_path, SCHEME_HASH))
+			return FALSE;
+		data = g_byte_array_sized_new (length + 1);
+		g_byte_array_append (data, (guint8 *) cert_path, length + 1);
+		priv->ca_cert = data;
+		return TRUE;
+	}
 
 	data = crypto_load_and_verify_certificate (cert_path, &format, error);
 	if (data) {
@@ -2426,6 +2469,13 @@ verify_cert (GByteArray *array, const char *prop_name, GError **error)
 			 * D-Bus and stuff like that.
 			 */
 			if (g_utf8_validate ((const char *) (array->data + strlen (SCHEME_PATH)), -1, NULL))
+				return TRUE;
+		}
+		break;
+	case NM_SETTING_802_1X_CK_SCHEME_HASH:
+		/* For hash-based schemes, verify that the has is zero-terminated */
+		if (array->data[array->len - 1] == '\0') {
+			if (g_str_has_prefix ((char *)array->data, SCHEME_HASH))
 				return TRUE;
 		}
 		break;

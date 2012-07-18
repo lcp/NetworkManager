@@ -115,6 +115,7 @@ global:
 	nm_setting_802_1x_get_anonymous_identity;
 	nm_setting_802_1x_get_ca_cert_blob;
 	nm_setting_802_1x_get_ca_cert_path;
+	nm_setting_802_1x_get_ca_cert_hash;
 	nm_setting_802_1x_get_ca_cert_scheme;
 	nm_setting_802_1x_get_ca_path;
 	nm_setting_802_1x_get_client_cert_blob;
