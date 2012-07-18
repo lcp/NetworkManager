@@ -873,6 +873,7 @@ get_cert_path (const char *keyfile_path, GByteArray *cert_path)
 }
 
 #define SCHEME_PATH "file://"
+#define SCHEME_HASH "hash://server/sha256/"
 
 static const char *certext[] = { ".pem", ".cert", ".crt", ".cer", ".p12", ".der", ".key" };
 
@@ -895,6 +896,12 @@ handle_as_scheme (GByteArray *array, NMSetting *setting, const char *key)
 	if (   (array->len > strlen (SCHEME_PATH))
 	    && g_str_has_prefix ((const char *) array->data, SCHEME_PATH)
 	    && (array->data[array->len - 1] == '\0')) {
+		g_object_set (setting, key, array, NULL);
+		return TRUE;
+	} else if (   (array->len > strlen (SCHEME_HASH))
+	           && g_str_has_prefix ((const char *) array->data, SCHEME_HASH)
+	           && (array->data[array->len - 1] == '\0')) {
+		/* It's the HASH scheme, can just set plain data */
 		g_object_set (setting, key, array, NULL);
 		return TRUE;
 	}

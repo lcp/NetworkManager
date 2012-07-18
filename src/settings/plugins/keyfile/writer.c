@@ -565,6 +565,7 @@ typedef struct ObjectType {
 	NMSetting8021xCKScheme (*scheme_func) (NMSetting8021x *setting);
 	NMSetting8021xCKFormat (*format_func) (NMSetting8021x *setting);
 	const char *           (*path_func)   (NMSetting8021x *setting);
+	const char *           (*hash_func)   (NMSetting8021x *setting);
 	const GByteArray *     (*blob_func)   (NMSetting8021x *setting);
 } ObjectType;
 
@@ -575,6 +576,7 @@ static const ObjectType objtypes[10] = {
 	  nm_setting_802_1x_get_ca_cert_scheme,
 	  NULL,
 	  nm_setting_802_1x_get_ca_cert_path,
+	  nm_setting_802_1x_get_ca_cert_hash,
 	  nm_setting_802_1x_get_ca_cert_blob },
 
 	{ NM_SETTING_802_1X_PHASE2_CA_CERT,
@@ -583,6 +585,7 @@ static const ObjectType objtypes[10] = {
 	  nm_setting_802_1x_get_phase2_ca_cert_scheme,
 	  NULL,
 	  nm_setting_802_1x_get_phase2_ca_cert_path,
+	  NULL,
 	  nm_setting_802_1x_get_phase2_ca_cert_blob },
 
 	{ NM_SETTING_802_1X_CLIENT_CERT,
@@ -591,6 +594,7 @@ static const ObjectType objtypes[10] = {
 	  nm_setting_802_1x_get_client_cert_scheme,
 	  NULL,
 	  nm_setting_802_1x_get_client_cert_path,
+	  NULL,
 	  nm_setting_802_1x_get_client_cert_blob },
 
 	{ NM_SETTING_802_1X_PHASE2_CLIENT_CERT,
@@ -599,6 +603,7 @@ static const ObjectType objtypes[10] = {
 	  nm_setting_802_1x_get_phase2_client_cert_scheme,
 	  NULL,
 	  nm_setting_802_1x_get_phase2_client_cert_path,
+	  NULL,
 	  nm_setting_802_1x_get_phase2_client_cert_blob },
 
 	{ NM_SETTING_802_1X_PRIVATE_KEY,
@@ -607,6 +612,7 @@ static const ObjectType objtypes[10] = {
 	  nm_setting_802_1x_get_private_key_scheme,
 	  nm_setting_802_1x_get_private_key_format,
 	  nm_setting_802_1x_get_private_key_path,
+	  NULL,
 	  nm_setting_802_1x_get_private_key_blob },
 
 	{ NM_SETTING_802_1X_PHASE2_PRIVATE_KEY,
@@ -615,6 +621,7 @@ static const ObjectType objtypes[10] = {
 	  nm_setting_802_1x_get_phase2_private_key_scheme,
 	  nm_setting_802_1x_get_phase2_private_key_format,
 	  nm_setting_802_1x_get_phase2_private_key_path,
+	  NULL,
 	  nm_setting_802_1x_get_phase2_private_key_blob },
 
 	{ NULL },
@@ -693,7 +700,7 @@ cert_writer (GKeyFile *file,
 	const char *setting_name = nm_setting_get_name (setting);
 	NMSetting8021xCKScheme scheme;
 	NMSetting8021xCKFormat format;
-	const char *path = NULL, *ext = "pem";
+	const char *path = NULL, *hash = NULL, *ext = "pem";
 	const ObjectType *objtype = NULL;
 	int i;
 
@@ -755,6 +762,11 @@ cert_writer (GKeyFile *file,
 			g_error_free (error);
 		}
 		g_free (new_path);
+	} else if (scheme == NM_SETTING_802_1X_CK_SCHEME_HASH) {
+		hash = objtype->hash_func (NM_SETTING_802_1X (setting));
+		g_assert (hash);
+
+		g_key_file_set_string (file, setting_name, key, hash);
 	} else
 		g_assert_not_reached ();
 }
