@@ -46,6 +46,7 @@ typedef enum {
 	NM_WIFI_ERROR_CONNECTION_INVALID,          /*< nick=ConnectionInvalid >*/
 	NM_WIFI_ERROR_CONNECTION_INCOMPATIBLE,     /*< nick=ConnectionIncompatible >*/
 	NM_WIFI_ERROR_ACCESS_POINT_NOT_FOUND,      /*< nick=AccessPointNotFound >*/
+	NM_WIFI_ERROR_INVALID_CERT_PROBE,          /*< nick=InvalidCertProbe >*/
 } NMWifiError;
 
 #define NM_DEVICE_WIFI_HW_ADDRESS          "hw-address"
@@ -83,6 +84,7 @@ struct _NMDeviceWifiClass
 	void (*hidden_ap_found)      (NMDeviceWifi *device, NMAccessPoint *ap);
 	void (*properties_changed)   (NMDeviceWifi *device, GHashTable *properties);
 	gboolean (*scanning_allowed) (NMDeviceWifi *device);
+	void (*cert_received)        (NMDeviceWifi *device, GHashTable *cert);
 };
 
 

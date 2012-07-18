@@ -174,6 +174,25 @@ nm_supplicant_config_add_option (NMSupplicantConfig *self,
 	return nm_supplicant_config_add_option_with_type (self, key, value, len, TYPE_INVALID, secret);
 }
 
+NMSupplicantConfig *
+nm_supplicant_config_new_probe (const GByteArray *ssid)
+{
+	NMSupplicantConfig *probe_config;
+
+	if (!ssid)
+		return NULL;
+
+	probe_config = (NMSupplicantConfig *)g_object_new (NM_TYPE_SUPPLICANT_CONFIG, NULL);
+
+	nm_supplicant_config_add_option (probe_config, "ssid", (char *)ssid->data, ssid->len, FALSE);
+	nm_supplicant_config_add_option (probe_config, "key_mgmt", "WPA-EAP", -1, FALSE);
+	nm_supplicant_config_add_option (probe_config, "eap", "TTLS PEAP TLS", -1, FALSE);
+	nm_supplicant_config_add_option (probe_config, "identity", " ", -1, FALSE);
+	nm_supplicant_config_add_option (probe_config, "ca_cert", "probe://", -1, FALSE);
+
+	return probe_config;
+}
+
 static gboolean
 nm_supplicant_config_add_blob (NMSupplicantConfig *self,
                                const char *key,
@@ -909,6 +928,11 @@ nm_supplicant_config_add_setting_8021x (NMSupplicantConfig *self,
 		break;
 	case NM_SETTING_802_1X_CK_SCHEME_PATH:
 		path = nm_setting_802_1x_get_ca_cert_path (setting);
+		if (!add_string_val (self, path, "ca_cert", FALSE, FALSE))
+			return FALSE;
+		break;
+	case NM_SETTING_802_1X_CK_SCHEME_HASH:
+		path = nm_setting_802_1x_get_ca_cert_hash (setting);
 		if (!add_string_val (self, path, "ca_cert", FALSE, FALSE))
 			return FALSE;
 		break;
