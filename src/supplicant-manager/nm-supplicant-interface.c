@@ -66,6 +66,7 @@ enum {
 	SCAN_DONE,           /* wifi scan is complete */
 	CONNECTION_ERROR,    /* an error occurred during a connection request */
 	CREDENTIALS_REQUEST, /* 802.1x identity or password requested */
+	CERTIFICATION,       /* a RADIUS server certificate was received */
 	LAST_SIGNAL
 };
 static guint signals[LAST_SIGNAL] = { 0 };
@@ -571,6 +572,17 @@ parse_capabilities (NMSupplicantInterface *self, GHashTable *props)
 }
 
 static void
+wpas_iface_got_certification (DBusGProxy *proxy,
+                              const GHashTable *cert_table,
+                              gpointer user_data)
+{
+	g_signal_emit (user_data,
+	               signals[CERTIFICATION],
+	               0,
+	               cert_table);
+}
+
+static void
 wpas_iface_properties_changed (DBusGProxy *proxy,
                                GHashTable *props,
                                gpointer user_data)
@@ -810,6 +822,18 @@ interface_add_done (NMSupplicantInterface *self, char *path)
 	                         G_TYPE_INVALID);
 	dbus_g_proxy_connect_signal (priv->iface_proxy, "NetworkRequest",
 	                             G_CALLBACK (wpas_iface_network_request),
+	                             self,
+	                             NULL);
+
+	dbus_g_object_register_marshaller (g_cclosure_marshal_VOID__BOXED,
+                                           G_TYPE_NONE,
+	                                   DBUS_TYPE_G_MAP_OF_VARIANT,
+	                                   G_TYPE_INVALID);
+	dbus_g_proxy_add_signal (priv->iface_proxy, "Certification",
+	                         DBUS_TYPE_G_MAP_OF_VARIANT,
+                                 G_TYPE_INVALID);
+	dbus_g_proxy_connect_signal (priv->iface_proxy, "Certification",
+	                             G_CALLBACK (wpas_iface_got_certification),
 	                             self,
 	                             NULL);
 
@@ -1605,5 +1629,13 @@ nm_supplicant_interface_class_init (NMSupplicantInterfaceClass *klass)
 		              NULL, NULL,
 		              _nm_marshal_VOID__STRING_STRING,
 		              G_TYPE_NONE, 2, G_TYPE_STRING, G_TYPE_STRING);
+	signals[CERTIFICATION] =
+		g_signal_new ("certification",
+		              G_OBJECT_CLASS_TYPE (object_class),
+		              G_SIGNAL_RUN_LAST,
+		              G_STRUCT_OFFSET (NMSupplicantInterfaceClass, certification),
+		              NULL, NULL,
+		              g_cclosure_marshal_VOID__BOXED,
+		              G_TYPE_NONE, 1, DBUS_TYPE_G_MAP_OF_VARIANT);
 }
 

@@ -52,6 +52,8 @@ GType nm_supplicant_config_get_type (void);
 
 NMSupplicantConfig *nm_supplicant_config_new (void);
 
+NMSupplicantConfig *nm_supplicant_config_new_probe (const GByteArray *ssid);
+
 guint32 nm_supplicant_config_get_ap_scan (NMSupplicantConfig *self);
 
 void nm_supplicant_config_set_ap_scan (NMSupplicantConfig *self,

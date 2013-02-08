@@ -60,10 +60,14 @@
 #include "nm-settings-connection.h"
 #include "nm-enum-types.h"
 #include "wifi-utils.h"
+#include "nm-dbus-glib-types.h"
 
 static gboolean impl_device_get_access_points (NMDeviceWifi *device,
                                                GPtrArray **aps,
                                                GError **err);
+static gboolean impl_device_probe_cert (NMDeviceWifi *device,
+                                        GByteArray *ssid,
+                                        GError **err);
 
 static void impl_device_request_scan (NMDeviceWifi *device,
                                       GHashTable *options,
@@ -104,6 +108,7 @@ enum {
 	HIDDEN_AP_FOUND,
 	PROPERTIES_CHANGED,
 	SCANNING_ALLOWED,
+	CERT_RECEIVED,
 
 	LAST_SIGNAL
 };
@@ -118,6 +123,7 @@ typedef struct Supplicant {
 
 	guint sig_ids[SUP_SIG_ID_LEN];
 	guint iface_error_id;
+	guint iface_cert_id;
 
 	/* Timeouts and idles */
 	guint iface_con_error_cb_id;
@@ -1809,6 +1815,89 @@ supplicant_iface_scan_done_cb (NMSupplicantInterface *iface,
 
 #define MAC_FMT "%02x:%02x:%02x:%02x:%02x:%02x"
 #define MAC_ARG(x) ((guint8*)(x))[0],((guint8*)(x))[1],((guint8*)(x))[2],((guint8*)(x))[3],((guint8*)(x))[4],((guint8*)(x))[5]
+
+static void
+supplicant_iface_certification_cb (NMSupplicantInterface * iface,
+                                   GHashTable *cert,
+                                   NMDeviceWifi * self)
+{
+	NMDeviceWifiPrivate *priv = NM_DEVICE_WIFI_GET_PRIVATE (self);
+	GValue *value;
+	const char *subject, *hash;
+	guint depth;
+
+	value = g_hash_table_lookup (cert, "depth");
+	if (!value || !G_VALUE_HOLDS_UINT(value)) {
+		nm_log_dbg (LOGD_WIFI_SCAN, "Depth was not set");
+		return;
+	}
+	depth = g_value_get_uint (value);
+
+	value = g_hash_table_lookup (cert, "subject");
+	if (!value || !G_VALUE_HOLDS_STRING(value))
+		return;
+	subject = g_value_get_string (value);
+
+	value = g_hash_table_lookup (cert, "cert_hash");
+	if (!value || !G_VALUE_HOLDS_STRING(value))
+		return;
+	hash = g_value_get_string (value);
+
+	nm_log_info (LOGD_WIFI_SCAN, "Got Server Certificate %u, subject %s, hash %s", depth, subject, hash);
+
+	if (depth != 0)
+		return;
+
+	g_signal_emit (self, signals[CERT_RECEIVED], 0, cert);
+
+	if (priv->supplicant.iface_cert_id > 0) {
+		g_signal_handler_disconnect (priv->supplicant.iface, priv->supplicant.iface_cert_id);
+		priv->supplicant.iface_cert_id = 0;
+	}
+
+	nm_supplicant_interface_disconnect (iface);
+}
+
+static gboolean
+impl_device_probe_cert (NMDeviceWifi *self,
+                        GByteArray *ssid,
+                        GError **err)
+{
+	NMDeviceWifiPrivate *priv = NM_DEVICE_WIFI_GET_PRIVATE (self);
+	NMSupplicantConfig *config = NULL;
+	guint id;
+	gboolean ret = FALSE;
+
+	config = nm_supplicant_config_new_probe (ssid);
+	if (!config)
+		goto error;
+
+	/* Hook up signal handler to capture certification signal */
+	id = g_signal_connect (priv->supplicant.iface,
+	                       "certification",
+	                       G_CALLBACK (supplicant_iface_certification_cb),
+	                       self);
+	priv->supplicant.iface_cert_id = id;
+
+	if (!nm_supplicant_interface_set_config (priv->supplicant.iface, config))
+		goto error;
+
+	ret = TRUE;
+
+error:
+	if (!ret) {
+		g_set_error_literal (err,
+		                     NM_WIFI_ERROR,
+		                     NM_WIFI_ERROR_INVALID_CERT_PROBE,
+		                     "Couldn't probe RADIUS server certificate");
+		if (priv->supplicant.iface_cert_id) {
+			g_signal_handler_disconnect (priv->supplicant.iface, priv->supplicant.iface_cert_id);
+			priv->supplicant.iface_cert_id = 0;
+		}
+	}
+
+	return ret;
+}
 
 /*
  * merge_scanned_ap
@@ -3662,6 +3751,16 @@ nm_device_wifi_class_init (NMDeviceWifiClass *klass)
 		              scanning_allowed_accumulator, NULL,
 		              _nm_marshal_BOOLEAN__VOID,
 		              G_TYPE_BOOLEAN, 0);
+
+	signals[CERT_RECEIVED] =
+		g_signal_new ("cert-received",
+		              G_OBJECT_CLASS_TYPE (object_class),
+		              G_SIGNAL_RUN_FIRST,
+		              G_STRUCT_OFFSET (NMDeviceWifiClass, cert_received),
+		              NULL, NULL,
+		              g_cclosure_marshal_VOID__BOXED,
+		              G_TYPE_NONE, 1,
+		              DBUS_TYPE_G_MAP_OF_VARIANT);
 
 	dbus_g_object_type_install_info (G_TYPE_FROM_CLASS (klass), &dbus_glib_nm_device_wifi_object_info);
 
