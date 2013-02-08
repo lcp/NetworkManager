@@ -80,6 +80,7 @@ enum {
 enum {
 	ACCESS_POINT_ADDED,
 	ACCESS_POINT_REMOVED,
+	CERT_RECEIVED,
 
 	LAST_SIGNAL
 };
@@ -343,6 +344,49 @@ access_point_removed (NMObject *self_obj, NMObject *ap_obj)
 	g_signal_emit (self, signals[ACCESS_POINT_REMOVED], 0, ap);
 }
 
+/**
+ * nm_device_wifi_probe_cert:
+ * @device: a #NMDeviceWifi
+ * @ssid: the ssid of the AP to probe
+ *
+ * Probe the certificate of the RADIUS server
+ *
+ * Returns: if the probe is sent or not
+ **/
+gboolean
+nm_device_wifi_probe_cert (NMDeviceWifi *device,
+                           const GByteArray *ssid)
+{
+	NMDeviceWifiPrivate *priv;
+	GError *error = NULL;
+	gboolean ret;
+
+	g_return_val_if_fail (NM_IS_DEVICE_WIFI (device), FALSE);
+
+	priv = NM_DEVICE_WIFI_GET_PRIVATE (device);
+
+	ret = dbus_g_proxy_call (priv->proxy, "ProbeCert", &error,
+				 DBUS_TYPE_G_UCHAR_ARRAY, ssid,
+				 G_TYPE_INVALID,
+				 G_TYPE_INVALID);
+
+	if (!ret) {
+		g_warning ("%s: error probe certificate: %s", __func__, error->message);
+		g_error_free (error);
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+static void
+cert_received_proxy (DBusGProxy *proxy, GHashTable *cert, gpointer user_data)
+{
+	NMDeviceWifi *self = NM_DEVICE_WIFI (user_data);
+
+	g_signal_emit (self, signals[CERT_RECEIVED], 0, cert);
+}
+
 static void
 clean_up_aps (NMDeviceWifi *self, gboolean notify)
 {
@@ -596,6 +640,13 @@ constructed (GObject *object)
 											nm_object_get_path (NM_OBJECT (object)),
 											NM_DBUS_INTERFACE_DEVICE_WIRELESS);
 
+	dbus_g_proxy_add_signal (priv->proxy, "CertReceived",
+	                         DBUS_TYPE_G_MAP_OF_VARIANT,
+	                         G_TYPE_INVALID);
+	dbus_g_proxy_connect_signal (priv->proxy, "CertReceived",
+						    G_CALLBACK (cert_received_proxy),
+						    object, NULL);
+
 	register_properties (NM_DEVICE_WIFI (object));
 
 	g_signal_connect (NM_DEVICE (object),
@@ -756,4 +807,22 @@ nm_device_wifi_class_init (NMDeviceWifiClass *wifi_class)
 				    g_cclosure_marshal_VOID__OBJECT,
 				    G_TYPE_NONE, 1,
 				    G_TYPE_OBJECT);
+
+	/**
+	 * NMDeviceWifi::cert-received:
+	 * @device: the wifi device that received the signal
+	 * @subject: the subject of the RADIUS server
+	 * @hash: the hash of the RADIUS server
+	 *
+	 * Notifies that a certificate of a RADIUS server is received.
+	 **/
+	signals[CERT_RECEIVED] =
+		g_signal_new ("cert-received",
+				    G_OBJECT_CLASS_TYPE (object_class),
+				    G_SIGNAL_RUN_FIRST,
+				    G_STRUCT_OFFSET (NMDeviceWifiClass, cert_received),
+				    NULL, NULL,
+				    g_cclosure_marshal_VOID__BOXED,
+				    G_TYPE_NONE, 1,
+				    G_TYPE_HASH_TABLE);
 }
